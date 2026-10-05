@@ -545,9 +545,6 @@ class MalayalamApp {
         this.drawnPointsCount = 0;
         this.strokeSegmentsCount = 0;
         this.totalStrokeLength = 0;
-        this.sharpTurnsCount = 0;
-        this.lastHeading = null;
-        this.lastSamplePos = null;
         this.lastPos = null;
     }
 
@@ -612,8 +609,6 @@ class MalayalamApp {
             e.preventDefault();
             this.isDrawing = true;
             this.lastPos = getPos(e);
-            this.lastSamplePos = this.lastPos;
-            this.lastHeading = null;
             this.strokeSegmentsCount++;
             this.sound.playStroke();
             this.hidePrompt();
@@ -627,25 +622,6 @@ class MalayalamApp {
             const dx = pos.x - this.lastPos.x;
             const dy = pos.y - this.lastPos.y;
             this.totalStrokeLength += Math.sqrt(dx * dx + dy * dy);
-
-            // Track sharp angular reversals (zigzag/scribble detection)
-            if (this.lastSamplePos) {
-                const sDx = pos.x - this.lastSamplePos.x;
-                const sDy = pos.y - this.lastSamplePos.y;
-                const sDist = Math.sqrt(sDx * sDx + sDy * sDy);
-                if (sDist >= 15) {
-                    const currentHeading = Math.atan2(sDy, sDx);
-                    if (this.lastHeading !== null) {
-                        let diff = Math.abs(currentHeading - this.lastHeading);
-                        if (diff > Math.PI) diff = 2 * Math.PI - diff;
-                        if (diff > 1.4) { // > 80 degrees sharp corner turn
-                            this.sharpTurnsCount++;
-                        }
-                    }
-                    this.lastHeading = currentHeading;
-                    this.lastSamplePos = pos;
-                }
-            }
 
             this.ctx.beginPath();
             this.ctx.moveTo(this.lastPos.x, this.lastPos.y);
@@ -663,7 +639,6 @@ class MalayalamApp {
         const stopDrawing = () => {
             this.isDrawing = false;
             this.lastPos = null;
-            this.lastSamplePos = null;
         };
 
         this.canvas.addEventListener('mousedown', startDrawing);
@@ -681,9 +656,6 @@ class MalayalamApp {
         this.drawnPointsCount = 0;
         this.strokeSegmentsCount = 0;
         this.totalStrokeLength = 0;
-        this.sharpTurnsCount = 0;
-        this.lastHeading = null;
-        this.lastSamplePos = null;
         this.showPrompt();
         this.hideCheckResult();
         this.sound.playClear();
@@ -854,14 +826,6 @@ class MalayalamApp {
         });
     }
 
-    _formatCandidates(list) {
-        if (!list || list.length === 0) return '';
-        const items = list.map(c => `"${c.char}" ("${c.roman}")`);
-        if (items.length === 1) return items[0];
-        if (items.length === 2) return `${items[0]} or ${items[1]}`;
-        return `${items.slice(0, -1).join(', ')}, or ${items[items.length - 1]}`;
-    }
-
     // ============================================================
     //  AI CHARACTER VERIFICATION ✨
     // ============================================================
@@ -882,14 +846,12 @@ class MalayalamApp {
             return;
         }
 
-        // 1. High-Accuracy Scribble & Zigzag Guard
-        const isScribble = this.sharpTurnsCount >= 3 ||
-                           this.strokeSegmentsCount > 12 ||
-                           this.totalStrokeLength > 2800;
+        // 1. Extreme Scribble Guard (only flag absurdly dense scribbles/scratches)
+        const isScribble = this.strokeSegmentsCount > 25 || this.totalStrokeLength > 6000;
 
         if (isScribble) {
             this.sound.playWrong();
-            this._showCheckResult('wrong', `❌ Scribble detected! Please trace "${letter.char}" carefully without zigzag lines.`);
+            this._showCheckResult('wrong', `❌ Scribble detected! Please trace "${letter.char}" carefully without extra lines.`);
             return;
         }
 
@@ -920,7 +882,6 @@ class MalayalamApp {
         const top3 = ranked[2];
 
         console.log(`[Hybrid Eval] Target: "${letter.char}" (${letter.roman}) | CNN Prob: ${(targetProb * 100).toFixed(1)}% | Shape Sim: ${(shapeSimilarity * 100).toFixed(1)}%`);
-        console.log('Top Detected:', ranked.slice(0, 4).map(r => `"${r.char}" (${(r.prob * 100).toFixed(1)}%)`).join(', '));
 
         const combinedScore = (targetProb * 0.70) + (shapeSimilarity * 0.30);
 
@@ -937,43 +898,21 @@ class MalayalamApp {
             return;
         }
 
-        // Case 2: Specific twin letter guidance
-        if (letter.char === 'ആ' && top1.char === 'അ') {
-            this.sound.playWrong();
-            const suggestions = this._formatCandidates(ranked.slice(0, 2));
-            this._showCheckResult('wrong', `❌ That looks like ${suggestions} instead of "ആ" ("aa")! Remember to add the right-hand loop.`);
-            return;
-        }
-        if (letter.char === 'അ' && top1.char === 'ആ') {
-            this.sound.playWrong();
-            const suggestions = this._formatCandidates(ranked.slice(0, 2));
-            this._showCheckResult('wrong', `❌ That looks like ${suggestions} instead of "അ" ("a")! "അ" does not have the extra loop on the right.`);
-            return;
-        }
-
-        // Case 3: Near Match / Target was in top 3
+        // Case 2: Near Match / Good Attempt
         const isNear = (top2 && top2.idx === targetGlobalIndex && targetProb >= 0.04) ||
-                       (top3 && top3.idx === targetGlobalIndex && targetProb >= 0.03);
+                       (top3 && top3.idx === targetGlobalIndex && targetProb >= 0.03) ||
+                       (shapeSimilarity >= 0.15);
 
         if (isNear) {
             this.sound.playWrong();
             const matchPct = Math.round(50 + Math.min(1.0, combinedScore / 0.15) * 20);
-            const suggestions = this._formatCandidates(ranked.filter(r => r.idx !== targetGlobalIndex).slice(0, 2));
-            this._showCheckResult('almost', `⚠️ Almost there! It currently resembles ${suggestions}. Keep practising "${letter.char}"! (${matchPct}% match)`);
+            this._showCheckResult('almost', `⚠️ Almost there! Keep practising "${letter.char}" (${letter.roman}) (${matchPct}% match)`);
             return;
         }
 
-        // Case 4: Clearly drew other letters -> Show all top matching candidate letters
+        // Case 3: Incorrect / Does not match
         this.sound.playWrong();
-        const topOthers = ranked.filter(r => r.idx !== targetGlobalIndex && r.prob >= 0.04).slice(0, 3);
-        const candidates = topOthers.length > 0 ? topOthers : ranked.filter(r => r.idx !== targetGlobalIndex).slice(0, 2);
-        const candidateStr = this._formatCandidates(candidates);
-
-        if (candidateStr) {
-            this._showCheckResult('wrong', `❌ That looks like ${candidateStr} instead of "${letter.char}" ("${letter.roman}")! Try tracing "${letter.char}" carefully.`);
-        } else {
-            this._showCheckResult('wrong', `❌ Try Again! Trace "${letter.char}" more carefully without extra strokes.`);
-        }
+        this._showCheckResult('wrong', `❌ Incorrect! Please trace "${letter.char}" ("${letter.roman}") carefully. Turn on Underlay for help!`);
     }
 
     _showCheckResult(type, message) {
