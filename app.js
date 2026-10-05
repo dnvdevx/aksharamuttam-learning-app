@@ -428,12 +428,11 @@ class MalayalamAIEngine {
         const S = AI_CONFIG.INPUT_SIZE;
         const userW = parseInt(userCanvas.style.width) || userCanvas.width;
         const userH = parseInt(userCanvas.style.height) || userCanvas.height;
-        const isDark = document.documentElement.classList.contains('dark');
 
         const raw = document.createElement('canvas');
         raw.width = userW;
         raw.height = userH;
-        const rawCtx = raw.getContext('2d');
+        const rawCtx = raw.getContext('2d', { willReadFrequently: true });
         rawCtx.drawImage(userCanvas, 0, 0, userCanvas.width, userCanvas.height, 0, 0, userW, userH);
         const rawData = rawCtx.getImageData(0, 0, userW, userH).data;
 
@@ -442,9 +441,7 @@ class MalayalamAIEngine {
             for (let x = 0; x < userW; x++) {
                 const i = (y * userW + x) * 4;
                 const a = rawData[i + 3];
-                const luma = (rawData[i] + rawData[i + 1] + rawData[i + 2]) / 3;
-                const isStroke = a > 30 && (isDark ? luma > 60 : luma < 200);
-                if (isStroke) {
+                if (a > 20) {
                     if (x < minX) minX = x;
                     if (y < minY) minY = y;
                     if (x > maxX) maxX = x;
@@ -458,11 +455,30 @@ class MalayalamAIEngine {
 
         const bboxW = maxX - minX + 1;
         const bboxH = maxY - minY + 1;
-        if (bboxW < 10 && bboxH < 10) return null;
+        if (bboxW < 8 && bboxH < 8) return null;
+
+        // Create pure high-contrast binary mask (white on black) - 100% iOS Safari & cross-browser compatible
+        const maskCanvas = document.createElement('canvas');
+        maskCanvas.width = userW;
+        maskCanvas.height = userH;
+        const mCtx = maskCanvas.getContext('2d', { willReadFrequently: true });
+        mCtx.fillStyle = '#000000';
+        mCtx.fillRect(0, 0, userW, userH);
+
+        const maskImg = mCtx.getImageData(0, 0, userW, userH);
+        for (let i = 0; i < rawData.length; i += 4) {
+            if (rawData[i + 3] > 20) {
+                maskImg.data[i] = 255;     // R
+                maskImg.data[i + 1] = 255; // G
+                maskImg.data[i + 2] = 255; // B
+                maskImg.data[i + 3] = 255; // A
+            }
+        }
+        mCtx.putImageData(maskImg, 0, 0);
 
         const tensorCanvas = document.createElement('canvas');
         tensorCanvas.width = tensorCanvas.height = S;
-        const tCtx = tensorCanvas.getContext('2d');
+        const tCtx = tensorCanvas.getContext('2d', { willReadFrequently: true });
         tCtx.fillStyle = '#000000';
         tCtx.fillRect(0, 0, S, S);
 
@@ -475,19 +491,13 @@ class MalayalamAIEngine {
         const dx = PAD + (inner - dw) / 2;
         const dy = PAD + (inner - dh) / 2;
 
-        if (isDark) {
-            tCtx.drawImage(raw, minX, minY, bboxW, bboxH, dx, dy, dw, dh);
-        } else {
-            tCtx.filter = 'invert(1)';
-            tCtx.drawImage(raw, minX, minY, bboxW, bboxH, dx, dy, dw, dh);
-            tCtx.filter = 'none';
-        }
+        tCtx.drawImage(maskCanvas, minX, minY, bboxW, bboxH, dx, dy, dw, dh);
 
         const finalData = tCtx.getImageData(0, 0, S, S).data;
         const rawFloats = new Float32Array(S * S);
         for (let p = 0; p < S * S; p++) {
             const v = finalData[p * 4];
-            rawFloats[p] = v > 25 ? Math.min(1.0, v / 255.0) : 0.0;
+            rawFloats[p] = v > 20 ? Math.min(1.0, v / 255.0) : 0.0;
         }
 
         const thickened = this._dilate2D(rawFloats, S, S, 1);
