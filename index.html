@@ -72,7 +72,16 @@
             </div>
 
             <!-- Header Actions -->
-            <div class="flex items-center space-x-3">
+            <div class="flex items-center space-x-2 sm:space-x-3">
+                <!-- Fun Quest / Trivia Modal Button -->
+                <button onclick="app.openOnboardingModal()"
+                    class="px-3 py-1.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-black text-xs shadow-sm hover:opacity-95 transition flex items-center space-x-1.5 active:scale-95"
+                    title="Malayalam Fun Facts, Mini-Game & Level Setup">
+                    <i class="fa-solid fa-graduation-cap"></i>
+                    <span class="hidden sm:inline">Quest & Trivia</span>
+                    <span class="sm:hidden">Quest</span>
+                </button>
+
                 <!-- AI Engine Status Badge -->
                 <div id="ai-status-badge" class="flex items-center space-x-1.5 px-3 py-1.5 rounded-full text-xs font-bold bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-200 transition-all">
                     <i class="fa-solid fa-spinner fa-spin text-[11px]" id="ai-status-icon"></i>
@@ -91,16 +100,22 @@
 
     <!-- Navigation Tabs -->
     <div class="bg-header border-b border-slate-200 dark:border-slate-800 px-4">
-        <div class="max-w-6xl mx-auto flex space-x-2">
-            <button id="tab-practice" onclick="app.navigateTo('practice')"
-                class="py-3 px-5 border-b-4 border-duo-green text-accent-green font-extrabold flex items-center space-x-2 transition">
-                <i class="fa-solid fa-pen-nib"></i>
-                <span>Practice Canvas</span>
-            </button>
-            <button id="tab-library" onclick="app.navigateTo('library')"
-                class="py-3 px-5 border-b-4 border-transparent text-tab-inactive font-extrabold flex items-center space-x-2 transition">
-                <i class="fa-solid fa-book-open"></i>
-                <span>Letter Library</span>
+        <div class="max-w-6xl mx-auto flex items-center justify-between">
+            <div class="flex space-x-2">
+                <button id="tab-practice" onclick="app.navigateTo('practice')"
+                    class="py-3 px-5 border-b-4 border-duo-green text-accent-green font-extrabold flex items-center space-x-2 transition">
+                    <i class="fa-solid fa-pen-nib"></i>
+                    <span>Practice Canvas</span>
+                </button>
+                <button id="tab-library" onclick="app.navigateTo('library')"
+                    class="py-3 px-5 border-b-4 border-transparent text-tab-inactive font-extrabold flex items-center space-x-2 transition">
+                    <i class="fa-solid fa-book-open"></i>
+                    <span>Letter Library (56)</span>
+                </button>
+            </div>
+            <button onclick="app.openOnboardingModal()" class="hidden md:flex items-center space-x-1.5 text-xs font-bold text-accent-blue hover:underline py-2">
+                <i class="fa-solid fa-gamepad"></i>
+                <span>Mini Games & Facts</span>
             </button>
         </div>
     </div>
@@ -304,11 +319,11 @@
                 <!-- Filter Tabs -->
                 <div class="flex flex-wrap gap-2 mb-6">
                     <button onclick="app.filterLibrary('all', event)"
-                        class="lib-filter-btn px-4 py-2 rounded-xl bg-filter-active text-filter-active font-extrabold text-sm shadow">All Letters</button>
+                        class="lib-filter-btn px-4 py-2 rounded-xl bg-filter-active text-filter-active font-extrabold text-sm shadow">All Letters (56)</button>
                     <button onclick="app.filterLibrary('vowel', event)"
                         class="lib-filter-btn px-4 py-2 rounded-xl bg-filter-inactive text-filter-inactive font-extrabold text-sm transition">Vowels (15)</button>
                     <button onclick="app.filterLibrary('consonant', event)"
-                        class="lib-filter-btn px-4 py-2 rounded-xl bg-filter-inactive text-filter-inactive font-extrabold text-sm transition">Consonants (10)</button>
+                        class="lib-filter-btn px-4 py-2 rounded-xl bg-filter-inactive text-filter-inactive font-extrabold text-sm transition">Consonants (36)</button>
                     <button onclick="app.filterLibrary('chillu', event)"
                         class="lib-filter-btn px-4 py-2 rounded-xl bg-filter-inactive text-filter-inactive font-extrabold text-sm transition">Chillu Letters (5)</button>
                 </div>
@@ -321,6 +336,154 @@
         </section>
 
     </main>
+
+    <!-- ==================== ONBOARDING & MINI-GAME MODAL ==================== -->
+    <div id="onboarding-modal" class="modal-backdrop hidden">
+        <div class="modal-content p-6 sm:p-8 flex flex-col justify-between max-h-[90vh] overflow-y-auto">
+            
+            <!-- Modal Header / Progress Indicators -->
+            <div class="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800">
+                <div class="flex items-center space-x-2">
+                    <span class="w-8 h-8 rounded-xl bg-emerald-100 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400 flex items-center justify-center font-black text-sm">
+                        <i class="fa-solid fa-sparkles"></i>
+                    </span>
+                    <h3 class="text-base font-extrabold text-heading" id="modal-step-title">Welcome to Thanima</h3>
+                </div>
+                <!-- Step Dots -->
+                <div class="flex items-center space-x-1.5" id="modal-step-dots">
+                    <div class="w-2.5 h-2.5 rounded-full bg-emerald-500 step-dot" data-step="1"></div>
+                    <div class="w-2.5 h-2.5 rounded-full bg-slate-300 dark:bg-slate-700 step-dot" data-step="2"></div>
+                    <div class="w-2.5 h-2.5 rounded-full bg-slate-300 dark:bg-slate-700 step-dot" data-step="3"></div>
+                </div>
+            </div>
+
+            <!-- STEP 1: LEVEL SELECTOR -->
+            <div id="modal-step-1" class="py-5 space-y-4">
+                <div class="text-center space-y-1">
+                    <span class="text-3xl">👋</span>
+                    <h2 class="text-xl font-black text-heading">നമസ്കാരം! (Namaskaram!)</h2>
+                    <p class="text-xs sm:text-sm text-muted">What would you like to practice today?</p>
+                </div>
+
+                <div class="space-y-2.5 pt-2">
+                    <div onclick="app.selectOnboardingLevel('vowels')"
+                        class="level-card p-3.5 rounded-2xl flex items-center justify-between bg-surface-soft border border-slate-200 dark:border-slate-700 selected"
+                        id="level-card-vowels">
+                        <div class="flex items-center space-x-3">
+                            <span class="text-2xl font-bold font-malayalam text-emerald-600 dark:text-emerald-400">അ</span>
+                            <div class="text-left">
+                                <div class="font-bold text-sm text-heading">Beginner • Vowels</div>
+                                <div class="text-xs text-muted">സ്വരാക്ഷരങ്ങൾ (15 Letters)</div>
+                            </div>
+                        </div>
+                        <i class="fa-solid fa-circle-check text-emerald-500 text-lg"></i>
+                    </div>
+
+                    <div onclick="app.selectOnboardingLevel('consonants')"
+                        class="level-card p-3.5 rounded-2xl flex items-center justify-between bg-surface-soft border border-slate-200 dark:border-slate-700"
+                        id="level-card-consonants">
+                        <div class="flex items-center space-x-3">
+                            <span class="text-2xl font-bold font-malayalam text-amber-600 dark:text-amber-400">ക</span>
+                            <div class="text-left">
+                                <div class="font-bold text-sm text-heading">Intermediate • Consonants</div>
+                                <div class="text-xs text-muted">വ്യഞ്ജനാക്ഷരങ്ങൾ (36 Letters)</div>
+                            </div>
+                        </div>
+                        <i class="fa-regular fa-circle text-slate-300 text-lg"></i>
+                    </div>
+
+                    <div onclick="app.selectOnboardingLevel('chillus')"
+                        class="level-card p-3.5 rounded-2xl flex items-center justify-between bg-surface-soft border border-slate-200 dark:border-slate-700"
+                        id="level-card-chillus">
+                        <div class="flex items-center space-x-3">
+                            <span class="text-2xl font-bold font-malayalam text-purple-600 dark:text-purple-400">ൽ</span>
+                            <div class="text-left">
+                                <div class="font-bold text-sm text-heading">Advanced • Chillu Letters</div>
+                                <div class="text-xs text-muted">ചില്ലക്ഷരങ്ങൾ (5 Letters)</div>
+                            </div>
+                        </div>
+                        <i class="fa-regular fa-circle text-slate-300 text-lg"></i>
+                    </div>
+                </div>
+            </div>
+
+            <!-- STEP 2: AKSHARA POP MINI-GAME -->
+            <div id="modal-step-2" class="py-5 space-y-4 hidden">
+                <div class="text-center space-y-1">
+                    <span class="text-3xl">🎮</span>
+                    <h2 class="text-xl font-black text-heading">Akshara Pop Mini-Quiz!</h2>
+                    <p class="text-xs sm:text-sm text-muted">Which letter starts the Malayalam word <b>"അമ്മ" (Amma - Mother)</b>?</p>
+                </div>
+
+                <div class="grid grid-cols-3 gap-3 pt-3" id="quiz-options-container">
+                    <button onclick="app.answerQuizOption('ഇ', false, this)"
+                        class="quiz-option p-4 rounded-2xl flex flex-col items-center justify-center font-malayalam text-4xl font-bold text-heading">
+                        ഇ
+                        <span class="text-[11px] font-sans font-semibold text-muted mt-1">(i)</span>
+                    </button>
+                    <button onclick="app.answerQuizOption('അ', true, this)"
+                        class="quiz-option p-4 rounded-2xl flex flex-col items-center justify-center font-malayalam text-4xl font-bold text-heading">
+                        അ
+                        <span class="text-[11px] font-sans font-semibold text-muted mt-1">(a)</span>
+                    </button>
+                    <button onclick="app.answerQuizOption('ഉ', false, this)"
+                        class="quiz-option p-4 rounded-2xl flex flex-col items-center justify-center font-malayalam text-4xl font-bold text-heading">
+                        ഉ
+                        <span class="text-[11px] font-sans font-semibold text-muted mt-1">(u)</span>
+                    </button>
+                </div>
+
+                <div id="quiz-feedback" class="text-center text-xs font-bold pt-2 min-h-[24px]">
+                    <!-- Feedback injected dynamically -->
+                </div>
+            </div>
+
+            <!-- STEP 3: FUN MALAYALAM FACTS -->
+            <div id="modal-step-3" class="py-5 space-y-4 hidden">
+                <div class="text-center space-y-1">
+                    <span class="text-3xl">💡</span>
+                    <h2 class="text-xl font-black text-heading">Did You Know?</h2>
+                    <p class="text-xs text-muted">Fascinating facts about the Malayalam language</p>
+                </div>
+
+                <!-- Fact Card -->
+                <div class="p-5 rounded-2xl bg-gradient-to-br from-emerald-500/10 to-teal-500/10 border border-emerald-500/30 text-center relative">
+                    <div id="fact-text" class="text-sm font-extrabold text-heading leading-relaxed">
+                        "The word 'മലയാളം' (Malayalam) is an exact palindrome — it reads identically forwards and backwards!"
+                    </div>
+                    <div class="flex justify-center items-center space-x-2 mt-4">
+                        <button onclick="app.prevFact()" class="w-8 h-8 rounded-full bg-surface border border-slate-300 dark:border-slate-700 text-xs font-bold flex items-center justify-center hover:bg-slate-100">
+                            <i class="fa-solid fa-chevron-left"></i>
+                        </button>
+                        <span id="fact-indicator" class="text-xs font-bold text-muted">1 of 4</span>
+                        <button onclick="app.nextFact()" class="w-8 h-8 rounded-full bg-surface border border-slate-300 dark:border-slate-700 text-xs font-bold flex items-center justify-center hover:bg-slate-100">
+                            <i class="fa-solid fa-chevron-right"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Modal Footer Actions -->
+            <div class="pt-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
+                <button id="modal-btn-back" onclick="app.prevOnboardingStep()"
+                    class="px-4 py-2 rounded-xl text-xs font-bold text-muted hover:text-heading transition invisible">
+                    <i class="fa-solid fa-arrow-left mr-1"></i> Back
+                </button>
+                <div class="flex space-x-2">
+                    <button onclick="app.closeOnboardingModal()"
+                        class="px-3.5 py-2 rounded-xl text-xs font-bold text-muted hover:bg-slate-100 dark:hover:bg-slate-800 transition">
+                        Skip
+                    </button>
+                    <button id="modal-btn-next" onclick="app.nextOnboardingStep()"
+                        class="px-5 py-2.5 rounded-xl bg-accent text-on-accent text-xs font-black shadow transition active:scale-95 flex items-center space-x-1.5">
+                        <span>Continue</span>
+                        <i class="fa-solid fa-arrow-right text-[11px]"></i>
+                    </button>
+                </div>
+            </div>
+
+        </div>
+    </div>
 
     <!-- Scripts -->
     <!-- TensorFlow.js: In-browser Deep Learning CNN for Malayalam Character Recognition -->

@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>⚡ Fast WebGL Malayalam CNN Trainer</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+    <script src="data.js"></script>
+    <style>
+        body { font-family: system-ui, sans-serif; background: #0f172a; color: #f8fafc; padding: 2rem; }
+        .box { max-width: 600px; margin: 0 auto; background: #1e293b; padding: 2rem; border-radius: 1rem; }
+        .progress-bar { width: 100%; height: 12px; background: #334155; border-radius: 6px; overflow: hidden; margin: 1rem 0; }
+        .progress-fill { height: 100%; width: 0%; background: #22c55e; transition: width 0.2s; }
+        button { background: #22c55e; color: #000; font-weight: 800; border: none; padding: 0.75rem 1.5rem; border-radius: 0.5rem; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <div class="box">
+        <h2>⚡ High-Speed WebGL Model Trainer</h2>
+        <p>This generates 3,360 augmented Malayalam character samples and trains the CNN using GPU acceleration.</p>
+        <button id="btn-start" onclick="startTraining()">Start Deep Training (GPU)</button>
+        <div class="progress-bar"><div id="progress" class="progress-fill"></div></div>
+        <div id="status" style="font-family: monospace; white-space: pre-wrap; margin-top: 1rem;">Ready to train.</div>
+    </div>
+
+    <script>
+        const FONTS = ['Gayathri', 'Manjari', 'Chilanka', 'Noto Sans Malayalam', 'sans-serif'];
+        const S = 48;
+        const SAMPLES_PER_CHAR = 60; // 56 * 60 = 3360 samples
+
+        function log(msg) {
+            document.getElementById('status').textContent += '\n' + msg;
+            console.log(msg);
+        }
+
+        function findBBox(data, w, h) {
+            let minX = w, minY = h, maxX = 0, maxY = 0, found = false;
+            for (let y = 0; y < h; y++) {
+                for (let x = 0; x < w; x++) {
+                    const i = (y * w + x) * 4;
+                    if (data[i] > 25) {
+                        if (x < minX) minX = x;
+                        if (y < minY) minY = y;
+                        if (x > maxX) maxX = x;
+                        if (y > maxY) maxY = y;
+                        found = true;
+                    }
+                }
+            }
+            return found ? { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 } : null;
+        }
+
+        function dilate2D(src, w, h, radius = 1) {
+            const dst = new Float32Array(w * h);
+            for (let y = 0; y < h; y++) {
+                for (let x = 0; x < w; x++) {
+                    let maxVal = src[y * w + x];
+                    for (let dy = -radius; dy <= radius; dy++) {
+                        for (let dx = -radius; dx <= radius; dx++) {
+                            const ny = y + dy;
+                            const nx = x + dx;
+                            if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
+                                const val = src[ny * w + nx];
+                                if (val > maxVal) maxVal = val;
+                            }
+                        }
+                    }
+                    dst[y * w + x] = maxVal;
+                }
+            }
+            return dst;
+        }
+
+        function renderAugmentedChar(char, sampleIdx) {
+            const BIG = 140;
+            const canvas = document.createElement('canvas');
+            canvas.width = canvas.height = BIG;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#000000';
+            ctx.fillRect(0, 0, BIG, BIG);
+
+            const font = FONTS[sampleIdx % FONTS.length];
+            const weight = (sampleIdx % 2 === 0) ? 'bold' : 'normal';
+            const fontSize = Math.round(BIG * (0.60 + (Math.random() - 0.5) * 0.12));
+            const rot = (Math.random() - 0.5) * 0.28;
+            const scale = 0.82 + Math.random() * 0.32;
+            const shiftX = (Math.random() - 0.5) * 6;
+            const shiftY = (Math.random() - 0.5) * 6;
+            const strokeMode = sampleIdx % 5;
+
+            ctx.save();
+            ctx.translate(BIG / 2 + shiftX, BIG / 2 + shiftY);
+            ctx.rotate(rot);
+            ctx.scale(scale, scale);
+            ctx.font = `${weight} ${fontSize}px "${font}", sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+
+            if (strokeMode === 0) {
+                ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 3.5; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+                ctx.strokeText(char, 0, 0);
+            } else if (strokeMode === 1) {
+                ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 6.5; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+                ctx.strokeText(char, 0, 0);
+            } else if (strokeMode === 2) {
+                ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 9.5; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+                ctx.strokeText(char, 0, 0);
+            } else if (strokeMode === 3) {
+                ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 12.0; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+                ctx.strokeText(char, 0, 0);
+            } else {
+                ctx.fillStyle = '#ffffff'; ctx.fillText(char, 0, 0);
+            }
+            ctx.restore();
+
+            const rawData = ctx.getImageData(0, 0, BIG, BIG).data;
+            const bbox = findBBox(rawData, BIG, BIG);
+
+            const outCanvas = document.createElement('canvas');
+            outCanvas.width = outCanvas.height = S;
+            const outCtx = outCanvas.getContext('2d');
+            outCtx.fillStyle = '#000000';
+            outCtx.fillRect(0, 0, S, S);
+
+            if (bbox) {
+                const PAD = Math.round(S * 0.12);
+                const inner = S - PAD * 2;
+                const maxDim = Math.max(bbox.w, bbox.h);
+                const scaleFactor = inner / maxDim;
+                const dw = bbox.w * scaleFactor;
+                const dh = bbox.h * scaleFactor;
+                const dx = PAD + (inner - dw) / 2;
+                const dy = PAD + (inner - dh) / 2;
+                outCtx.drawImage(canvas, bbox.x, bbox.y, bbox.w, bbox.h, dx, dy, dw, dh);
+            } else {
+                outCtx.drawImage(canvas, 0, 0, BIG, BIG, 0, 0, S, S);
+            }
+
+            const finalData = outCtx.getImageData(0, 0, S, S).data;
+            const rawFloats = new Float32Array(S * S);
+            for (let p = 0; p < S * S; p++) {
+                const v = finalData[p * 4];
+                rawFloats[p] = v > 25 ? Math.min(1.0, v / 255.0) : 0.0;
+            }
+            return dilate2D(rawFloats, S, S, 1);
+        }
+
+        async function startTraining() {
+            document.getElementById('btn-start').disabled = true;
+            log('⚡ Initializing WebGL GPU backend...');
+            await tf.setBackend('webgl');
+            await tf.ready();
+            log('Backend ready: ' + tf.getBackend());
+
+            const numClasses = MALAYALAM_CURRICULUM.length;
+            const totalSamples = numClasses * SAMPLES_PER_CHAR;
+            log(`Synthesizing ${totalSamples} samples...`);
+
+            const allImages = new Float32Array(totalSamples * S * S);
+            const allLabels = new Int32Array(totalSamples);
+            let sampleCount = 0;
+
+            for (let c = 0; c < numClasses; c++) {
+                const char = MALAYALAM_CURRICULUM[c].char;
+                for (let s = 0; s < SAMPLES_PER_CHAR; s++) {
+                    const floats = renderAugmentedChar(char, s);
+                    allImages.set(floats, sampleCount * S * S);
+                    allLabels[sampleCount] = c;
+                    sampleCount++;
+                }
+            }
+
+            log('Building 3-Block CNN architecture...');
+            const model = tf.sequential();
+            model.add(tf.layers.conv2d({ inputShape: [S, S, 1], filters: 32, kernelSize: 3, padding: 'same', activation: 'relu' }));
+            model.add(tf.layers.batchNormalization());
+            model.add(tf.layers.conv2d({ filters: 32, kernelSize: 3, activation: 'relu' }));
+            model.add(tf.layers.maxPooling2d({ poolSize: [2, 2] }));
+            model.add(tf.layers.dropout({ rate: 0.20 }));
+
+            model.add(tf.layers.conv2d({ filters: 64, kernelSize: 3, padding: 'same', activation: 'relu' }));
+            model.add(tf.layers.batchNormalization());
+            model.add(tf.layers.conv2d({ filters: 64, kernelSize: 3, activation: 'relu' }));
+            model.add(tf.layers.maxPooling2d({ poolSize: [2, 2] }));
+            model.add(tf.layers.dropout({ rate: 0.25 }));
+
+            model.add(tf.layers.conv2d({ filters: 128, kernelSize: 3, padding: 'same', activation: 'relu' }));
+            model.add(tf.layers.batchNormalization());
+            model.add(tf.layers.maxPooling2d({ poolSize: [2, 2] }));
+            model.add(tf.layers.dropout({ rate: 0.30 }));
+
+            model.add(tf.layers.flatten());
+            model.add(tf.layers.dense({ units: 192, activation: 'relu' }));
+            model.add(tf.layers.dropout({ rate: 0.35 }));
+            model.add(tf.layers.dense({ units: numClasses, activation: 'softmax' }));
+
+            model.compile({
+                optimizer: tf.train.adam(0.001),
+                loss: 'categoricalCrossentropy',
+                metrics: ['accuracy']
+            });
+
+            const xs = tf.tensor4d(allImages, [totalSamples, S, S, 1]);
+            const ys = tf.oneHot(tf.tensor1d(allLabels, 'int32'), numClasses);
+
+            const EPOCHS = 35;
+            log(`Starting GPU training for ${EPOCHS} epochs...`);
+
+            await model.fit(xs, ys, {
+                epochs: EPOCHS,
+                batchSize: 64,
+                shuffle: true,
+                callbacks: {
+                    onEpochEnd: (epoch, logs) => {
+                        const pct = Math.round(((epoch + 1) / EPOCHS) * 100);
+                        document.getElementById('progress').style.width = pct + '%';
+                        log(`Epoch ${epoch + 1}/${EPOCHS} - Loss: ${logs.loss.toFixed(4)} - Acc: ${(logs.acc * 100).toFixed(1)}%`);
+                    }
+                }
+            });
+
+            xs.dispose();
+            ys.dispose();
+
+            log('Saving model weights to downloads...');
+            await model.save('downloads://model');
+            log('🎉 Done! Files "model.json" and "model.weights.bin" downloaded.');
+        }
+    </script>
+</body>
+</html>

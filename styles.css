@@ -192,3 +192,85 @@ html.dark #check-result.result-loading { background: #0c4a6e; color: #7dd3fc; bo
     60%  { transform: scale(1.03); }
     100% { transform: scale(1);    opacity: 1; }
 }
+
+/* ---- Onboarding Modal & Mini-Game Styles ---- */
+.modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.75);
+    backdrop-filter: blur(8px);
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    animation: fadeIn 0.25s ease-out;
+}
+
+.modal-content {
+    background: var(--c-bg-surface);
+    border: 2px solid var(--c-border-card);
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.35);
+    border-radius: 1.75rem;
+    max-width: 520px;
+    width: 100%;
+    overflow: hidden;
+    animation: modalSlideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+@keyframes modalSlideUp {
+    from { transform: translateY(20px) scale(0.96); opacity: 0; }
+    to   { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+.quiz-option {
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    border: 2px solid var(--c-border-card);
+    background: var(--c-bg-surface-soft);
+    cursor: pointer;
+}
+.quiz-option:hover {
+    transform: translateY(-2px);
+    border-color: #22c55e;
+    background: rgba(34, 197, 94, 0.08);
+}
+.quiz-option.correct {
+    border-color: #22c55e !important;
+    background: #dcfce7 !important;
+    color: #15803d !important;
+    transform: scale(1.04);
+}
+html.dark .quiz-option.correct {
+    background: #14532d !important;
+    color: #86efac !important;
+    border-color: #22c55e !important;
+}
+.quiz-option.wrong {
+    border-color: #ef4444 !important;
+    background: #fee2e2 !important;
+    color: #b91c1c !important;
+}
+html.dark .quiz-option.wrong {
+    background: #7f1d1d !important;
+    color: #fca5a5 !important;
+}
+
+.level-card {
+    transition: all 0.2s ease;
+    border: 2px solid var(--c-border-card);
+    cursor: pointer;
+}
+.level-card:hover {
+    border-color: #3b82f6;
+    transform: translateY(-2px);
+}
+.level-card.selected {
+    border-color: #22c55e;
+    background: rgba(34, 197, 94, 0.1);
+}
+

@@ -80,15 +80,26 @@ class MalayalamAIEngine {
             // Build reference structural templates for all 56 characters
             this._generateReferenceTemplates();
 
-            // Try loading cached model from IndexedDB
+            // 1. First, load pre-bundled static deep model (~100ms)
+            try {
+                this.model = await tf.loadLayersModel('./model/model.json');
+                console.log('✅ Loaded pre-trained static Malayalam CNN model from ./model/model.json');
+                this.isReady = true;
+                this._updateStatus('AI Ready ✅', 'ready', onStatusChange);
+                return;
+            } catch (staticErr) {
+                console.warn('Could not load static model, checking IndexedDB cache...', staticErr);
+            }
+
+            // 2. Try loading cached model from IndexedDB
             try {
                 this.model = await tf.loadLayersModel(AI_CONFIG.MODEL_DB_KEY);
-                console.log('✅ Loaded cached CNN model (v8) from IndexedDB');
+                console.log('✅ Loaded cached CNN model from IndexedDB');
                 this.isReady = true;
                 this._updateStatus('AI Ready ✅', 'ready', onStatusChange);
                 return;
             } catch (_) {
-                console.log('ℹ️ Training calibrated CNN model (v8)...');
+                console.log('ℹ️ Synthesizing and training in browser...');
             }
 
             this.isTraining = true;
@@ -546,6 +557,17 @@ class MalayalamApp {
         this.strokeSegmentsCount = 0;
         this.totalStrokeLength = 0;
         this.lastPos = null;
+
+        // Onboarding & Quest State
+        this.currentOnboardingStep = 1;
+        this.selectedOnboardingLevel = 'vowels';
+        this.currentFactIndex = 0;
+        this.malayalamFacts = [
+            "The word 'മലയാളം' (Malayalam) is an exact palindrome — it reads identically forwards and backwards!",
+            "Malayalam has 56 official characters (15 vowels, 36 consonants, 5 chillus) — giving it one of the richest phonetic scripts in the world!",
+            "Malayalam was officially designated a Classical Language of India in 2013 for its ancient literary heritage.",
+            "Handwriting and tracing Malayalam letters develops visual-spatial memory and fine motor skills!"
+        ];
     }
 
     init() {
@@ -562,6 +584,11 @@ class MalayalamApp {
         this.ai.initialize((statusText, state) => {
             this._updateAIStatusBadge(statusText, state);
         });
+
+        // Show welcome onboarding mini-game on first visit
+        if (!localStorage.getItem('thanima_onboarded')) {
+            setTimeout(() => this.openOnboardingModal(), 500);
+        }
     }
 
     _updateAIStatusBadge(text, state) {
@@ -824,6 +851,138 @@ class MalayalamApp {
             const show = type === 'all' || card.dataset.type === type;
             card.classList.toggle('hidden', !show);
         });
+    }
+
+    // ============================================================
+    //  ONBOARDING & MINI-GAME MODAL ✨
+    // ============================================================
+    openOnboardingModal() {
+        this.currentOnboardingStep = 1;
+        this._updateOnboardingStepView();
+        const modal = document.getElementById('onboarding-modal');
+        if (modal) modal.classList.remove('hidden');
+    }
+
+    closeOnboardingModal() {
+        const modal = document.getElementById('onboarding-modal');
+        if (modal) modal.classList.add('hidden');
+        localStorage.setItem('thanima_onboarded', 'true');
+    }
+
+    selectOnboardingLevel(level) {
+        this.selectedOnboardingLevel = level;
+        ['vowels', 'consonants', 'chillus'].forEach(l => {
+            const card = document.getElementById(`level-card-${l}`);
+            if (!card) return;
+            const isSel = l === level;
+            card.classList.toggle('selected', isSel);
+            const icon = card.querySelector('i');
+            if (icon) {
+                icon.className = isSel
+                    ? 'fa-solid fa-circle-check text-emerald-500 text-lg'
+                    : 'fa-regular fa-circle text-slate-300 text-lg';
+            }
+        });
+        this.sound.playStroke();
+    }
+
+    nextOnboardingStep() {
+        if (this.currentOnboardingStep < 3) {
+            this.currentOnboardingStep++;
+            this._updateOnboardingStepView();
+            this.sound.playStroke();
+        } else {
+            // Finished onboarding!
+            this.filterCategory(this.selectedOnboardingLevel);
+            this.closeOnboardingModal();
+            this.sound.playCorrect();
+        }
+    }
+
+    prevOnboardingStep() {
+        if (this.currentOnboardingStep > 1) {
+            this.currentOnboardingStep--;
+            this._updateOnboardingStepView();
+            this.sound.playStroke();
+        }
+    }
+
+    _updateOnboardingStepView() {
+        const titles = [
+            'Welcome to Thanima',
+            'Akshara Pop Mini-Quiz',
+            'Did You Know? (Fun Facts)'
+        ];
+        const titleEl = document.getElementById('modal-step-title');
+        if (titleEl) titleEl.textContent = titles[this.currentOnboardingStep - 1] || 'Welcome to Thanima';
+
+        [1, 2, 3].forEach(step => {
+            const stepEl = document.getElementById(`modal-step-${step}`);
+            if (stepEl) stepEl.classList.toggle('hidden', step !== this.currentOnboardingStep);
+        });
+
+        // Update step dots
+        document.querySelectorAll('.step-dot').forEach(dot => {
+            const dotStep = parseInt(dot.dataset.step);
+            if (dotStep === this.currentOnboardingStep) {
+                dot.className = 'w-2.5 h-2.5 rounded-full bg-emerald-500 step-dot';
+            } else if (dotStep < this.currentOnboardingStep) {
+                dot.className = 'w-2.5 h-2.5 rounded-full bg-emerald-300 dark:bg-emerald-800 step-dot';
+            } else {
+                dot.className = 'w-2.5 h-2.5 rounded-full bg-slate-300 dark:bg-slate-700 step-dot';
+            }
+        });
+
+        const btnBack = document.getElementById('modal-btn-back');
+        if (btnBack) {
+            btnBack.classList.toggle('invisible', this.currentOnboardingStep === 1);
+        }
+
+        const btnNext = document.getElementById('modal-btn-next');
+        if (btnNext) {
+            btnNext.innerHTML = (this.currentOnboardingStep === 3)
+                ? `<span>Start Tracing ✨</span><i class="fa-solid fa-play text-[11px]"></i>`
+                : `<span>Continue</span><i class="fa-solid fa-arrow-right text-[11px]"></i>`;
+        }
+    }
+
+    answerQuizOption(char, isCorrect, btnEl) {
+        const feedback = document.getElementById('quiz-feedback');
+        document.querySelectorAll('.quiz-option').forEach(btn => {
+            btn.classList.remove('correct', 'wrong');
+        });
+
+        if (isCorrect) {
+            btnEl.classList.add('correct');
+            this.sound.playCorrect();
+            if (feedback) {
+                feedback.innerHTML = `<span class="text-emerald-600 dark:text-emerald-400">🎉 Spot on! "അ" (a) is the very first Malayalam vowel for "അമ്മ" (Amma)!</span>`;
+            }
+        } else {
+            btnEl.classList.add('wrong');
+            this.sound.playWrong();
+            if (feedback) {
+                feedback.innerHTML = `<span class="text-red-500">Not quite! "അ" makes the starting sound of "അമ്മ". Try tapping "അ"!</span>`;
+            }
+        }
+    }
+
+    nextFact() {
+        this.currentFactIndex = (this.currentFactIndex + 1) % this.malayalamFacts.length;
+        this._renderFact();
+    }
+
+    prevFact() {
+        this.currentFactIndex = (this.currentFactIndex - 1 + this.malayalamFacts.length) % this.malayalamFacts.length;
+        this._renderFact();
+    }
+
+    _renderFact() {
+        const factText = document.getElementById('fact-text');
+        const factInd = document.getElementById('fact-indicator');
+        if (factText) factText.textContent = `"${this.malayalamFacts[this.currentFactIndex]}"`;
+        if (factInd) factInd.textContent = `${this.currentFactIndex + 1} of ${this.malayalamFacts.length}`;
+        this.sound.playStroke();
     }
 
     // ============================================================
