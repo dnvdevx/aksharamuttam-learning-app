@@ -19,6 +19,7 @@
   },
   "homepage": "https://github.com/TEJASKJ07/Thanima-Malayalam-Learning-Canvas#readme",
   "dependencies": {
+    "@napi-rs/canvas": "^1.0.10",
     "@tensorflow/tfjs": "^4.22.0"
   }
 }
