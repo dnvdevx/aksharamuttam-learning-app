@@ -504,6 +504,16 @@ class MalayalamAIEngine {
         return { tensor: tf.tensor4d(thickened, [1, S, S, 1]), userFloats: thickened };
     }
 
+    _flipHorizontal(src, S) {
+        const dst = new Float32Array(S * S);
+        for (let y = 0; y < S; y++) {
+            for (let x = 0; x < S; x++) {
+                dst[y * S + x] = src[y * S + (S - 1 - x)];
+            }
+        }
+        return dst;
+    }
+
     // --- Structural Shape Similarity Score ---
     computeShapeSimilarity(userFloats, targetIndex) {
         const refFloats = this.referenceTemplates.get(targetIndex);
@@ -532,11 +542,16 @@ class MalayalamAIEngine {
             const probs = await predTensor.data();
             predTensor.dispose();
 
-            const shapeSim = this.computeShapeSimilarity(prep.userFloats, targetIndex);
+            const directSim = this.computeShapeSimilarity(prep.userFloats, targetIndex);
+            const flippedFloats = this._flipHorizontal(prep.userFloats, AI_CONFIG.INPUT_SIZE);
+            const flippedSim = this.computeShapeSimilarity(flippedFloats, targetIndex);
+            const isMirrored = (flippedSim > directSim + 0.05 && flippedSim >= 0.20);
 
             return {
                 probabilities: Array.from(probs),
-                shapeSimilarity: shapeSim
+                shapeSimilarity: directSim,
+                flippedSimilarity: flippedSim,
+                isMirrored: isMirrored
             };
         } catch (err) {
             console.error('Prediction error:', err);
@@ -1056,9 +1071,16 @@ class MalayalamApp {
 
         // ── DECISION LOGIC ────────────────────────────────────────
 
+        // Case 0: Mirror / Reversed Drawing Detection
+        if (evalResult.isMirrored) {
+            this.sound.playWrong();
+            this._showCheckResult('wrong', `❌ Mirrored / Reversed! You drew "${letter.char}" (${letter.roman}) backwards. Turn on Underlay to see the correct direction!`);
+            return;
+        }
+
         // Case 1: Target character is Correct (Top-1 OR strong structural + CNN consensus)
-        const isTargetTop1 = (top1.idx === targetGlobalIndex && targetProb >= 0.05);
-        const isStrongConsensus = (shapeSimilarity >= 0.22 && targetProb >= 0.04);
+        const isTargetTop1 = (top1.idx === targetGlobalIndex && targetProb >= 0.08 && shapeSimilarity >= 0.12);
+        const isStrongConsensus = (shapeSimilarity >= 0.22 && targetProb >= 0.05);
 
         if (isTargetTop1 || isStrongConsensus) {
             this.sound.playCorrect();
@@ -1068,9 +1090,9 @@ class MalayalamApp {
         }
 
         // Case 2: Near Match / Good Attempt
-        const isNear = (top2 && top2.idx === targetGlobalIndex && targetProb >= 0.04) ||
-                       (top3 && top3.idx === targetGlobalIndex && targetProb >= 0.03) ||
-                       (shapeSimilarity >= 0.15);
+        const isNear = (top2 && top2.idx === targetGlobalIndex && targetProb >= 0.05) ||
+                       (top3 && top3.idx === targetGlobalIndex && targetProb >= 0.04) ||
+                       (shapeSimilarity >= 0.16);
 
         if (isNear) {
             this.sound.playWrong();
