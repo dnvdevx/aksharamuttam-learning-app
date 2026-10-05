@@ -1,16 +1,16 @@
 // =============================================
 //  THANIMA MALAYALAM LEARNING CANVAS
-//  High-Accuracy AI CNN Character Recognition Engine (v6)
+//  Hybrid Deep Learning & Structural Handwriting Engine (v8)
 // =============================================
 
 const AI_CONFIG = {
-    INPUT_SIZE: 48,                    // 48x48 CNN input tensor
-    NUM_CLASSES: 56,                   // All 56 Malayalam characters (15 vowels + 36 consonants + 5 chillus)
-    SAMPLES_PER_CHAR: 140,             // 140 rich synthetic variations per character (~7,840 total samples)
-    EPOCHS: 28,                        // High-accuracy training epochs
+    INPUT_SIZE: 48,
+    NUM_CLASSES: 56,
+    SAMPLES_PER_CHAR: 120,
+    EPOCHS: 24,
     BATCH_SIZE: 64,
-    MODEL_DB_KEY: 'indexeddb://thanima-malayalam-cnn-v6',
-    FONTS: ['Gayathri', 'Manjari', 'Chilanka', 'Noto Sans Malayalam', 'sans-serif'],
+    MODEL_DB_KEY: 'indexeddb://thanima-malayalam-cnn-v8',
+    FONTS: ['Gayathri', 'Manjari', 'Noto Sans Malayalam'],
 };
 
 // =============================================
@@ -53,7 +53,7 @@ class SoundFX {
 }
 
 // =============================================
-//  DEEP LEARNING AI ENGINE (TensorFlow.js)
+//  AI & STRUCTURAL VERIFICATION ENGINE
 // =============================================
 class MalayalamAIEngine {
     constructor() {
@@ -61,6 +61,7 @@ class MalayalamAIEngine {
         this.isReady = false;
         this.isTraining = false;
         this.statusText = 'AI Loading...';
+        this.referenceTemplates = new Map();
     }
 
     async initialize(onStatusChange) {
@@ -74,25 +75,24 @@ class MalayalamAIEngine {
 
         try {
             await tf.ready();
+            await this._preloadFonts();
 
-            // 1. Try loading cached trained model from local IndexedDB
+            // Build reference structural templates for all 56 characters
+            this._generateReferenceTemplates();
+
+            // Try loading cached model from IndexedDB
             try {
                 this.model = await tf.loadLayersModel(AI_CONFIG.MODEL_DB_KEY);
-                console.log('✅ Loaded high-accuracy Malayalam CNN model (v6) from IndexedDB');
+                console.log('✅ Loaded cached CNN model (v8) from IndexedDB');
                 this.isReady = true;
                 this._updateStatus('AI Ready ✅', 'ready', onStatusChange);
                 return;
             } catch (_) {
-                console.log('ℹ️ Preparing to train new high-accuracy CNN model...');
+                console.log('ℹ️ Training calibrated CNN model (v8)...');
             }
 
             this.isTraining = true;
-            this._updateStatus('Loading Malayalam Fonts...', 'training', onStatusChange);
-
-            // Preload Malayalam fonts
-            await this._preloadFonts();
-
-            this._updateStatus('Training AI Model (please wait a few seconds)...', 'training', onStatusChange);
+            this._updateStatus('Training AI Model (~3s)...', 'training', onStatusChange);
             await this._buildAndTrainModel(onStatusChange);
 
             this.isReady = true;
@@ -108,11 +108,10 @@ class MalayalamAIEngine {
     async _preloadFonts() {
         try {
             const fontLoads = [];
-            const fontsToLoad = ['Gayathri', 'Manjari', 'Chilanka', 'Noto Sans Malayalam'];
-            for (const font of fontsToLoad) {
+            for (const font of AI_CONFIG.FONTS) {
                 for (const item of MALAYALAM_CURRICULUM) {
-                    fontLoads.push(document.fonts.load(`bold 48px "${font}"`, item.char));
-                    fontLoads.push(document.fonts.load(`400 48px "${font}"`, item.char));
+                    fontLoads.push(document.fonts.load(`bold 70px "${font}"`, item.char));
+                    fontLoads.push(document.fonts.load(`400 70px "${font}"`, item.char));
                 }
             }
             await Promise.all(fontLoads);
@@ -129,11 +128,60 @@ class MalayalamAIEngine {
         if (callback) callback(text, state);
     }
 
+    // --- Generate Reference Shape Templates ---
+    _generateReferenceTemplates() {
+        const S = AI_CONFIG.INPUT_SIZE;
+        const offCanvas = document.createElement('canvas');
+        offCanvas.width = offCanvas.height = S;
+        const ctx = offCanvas.getContext('2d');
+
+        for (let i = 0; i < MALAYALAM_CURRICULUM.length; i++) {
+            const char = MALAYALAM_CURRICULUM[i].char;
+            this._renderCleanChar(ctx, char, S);
+            const data = ctx.getImageData(0, 0, S, S).data;
+            const floats = new Float32Array(S * S);
+            for (let p = 0; p < S * S; p++) {
+                floats[p] = data[p * 4] > 30 ? 1.0 : 0.0;
+            }
+            this.referenceTemplates.set(i, floats);
+        }
+    }
+
+    _renderCleanChar(ctx, char, size) {
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(0, 0, size, size);
+
+        const BIG = 120;
+        const temp = document.createElement('canvas');
+        temp.width = temp.height = BIG;
+        const tCtx = temp.getContext('2d');
+        tCtx.fillStyle = '#000000';
+        tCtx.fillRect(0, 0, BIG, BIG);
+
+        tCtx.font = `bold 75px "Gayathri", "Manjari", "Noto Sans Malayalam", sans-serif`;
+        tCtx.textAlign = 'center';
+        tCtx.textBaseline = 'middle';
+        tCtx.fillStyle = '#ffffff';
+        tCtx.fillText(char, BIG / 2, BIG / 2);
+
+        const bbox = this._findBBox(tCtx.getImageData(0, 0, BIG, BIG).data, BIG, BIG);
+        if (bbox) {
+            const PAD = Math.round(size * 0.12);
+            const inner = size - PAD * 2;
+            const maxDim = Math.max(bbox.w, bbox.h);
+            const scale = inner / maxDim;
+            const dw = bbox.w * scale;
+            const dh = bbox.h * scale;
+            const dx = PAD + (inner - dw) / 2;
+            const dy = PAD + (inner - dh) / 2;
+            ctx.drawImage(temp, bbox.x, bbox.y, bbox.w, bbox.h, dx, dy, dw, dh);
+        }
+    }
+
     // --- CNN Model Architecture ---
     _createModel() {
         const model = tf.sequential();
 
-        // Block 1: 48x48 -> 24x24
         model.add(tf.layers.conv2d({
             inputShape: [AI_CONFIG.INPUT_SIZE, AI_CONFIG.INPUT_SIZE, 1],
             filters: 32,
@@ -151,7 +199,6 @@ class MalayalamAIEngine {
         model.add(tf.layers.maxPooling2d({ poolSize: 2 }));
         model.add(tf.layers.dropout({ rate: 0.15 }));
 
-        // Block 2: 24x24 -> 12x12
         model.add(tf.layers.conv2d({
             filters: 64,
             kernelSize: 3,
@@ -168,7 +215,6 @@ class MalayalamAIEngine {
         model.add(tf.layers.maxPooling2d({ poolSize: 2 }));
         model.add(tf.layers.dropout({ rate: 0.20 }));
 
-        // Block 3: 12x12 -> 6x6
         model.add(tf.layers.conv2d({
             filters: 128,
             kernelSize: 3,
@@ -179,7 +225,6 @@ class MalayalamAIEngine {
         model.add(tf.layers.maxPooling2d({ poolSize: 2 }));
         model.add(tf.layers.dropout({ rate: 0.25 }));
 
-        // Dense Classifier
         model.add(tf.layers.flatten());
         model.add(tf.layers.dense({ units: 256, activation: 'relu' }));
         model.add(tf.layers.batchNormalization());
@@ -187,7 +232,7 @@ class MalayalamAIEngine {
         model.add(tf.layers.dense({ units: AI_CONFIG.NUM_CLASSES, activation: 'softmax' }));
 
         model.compile({
-            optimizer: tf.train.adam(0.001),
+            optimizer: tf.train.adam(0.0012),
             loss: 'categoricalCrossentropy',
             metrics: ['accuracy']
         });
@@ -195,7 +240,6 @@ class MalayalamAIEngine {
         return model;
     }
 
-    // --- Synthetic Dataset Generation & Training ---
     async _buildAndTrainModel(onStatusChange) {
         const S = AI_CONFIG.INPUT_SIZE;
         const totalSamples = MALAYALAM_CURRICULUM.length * AI_CONFIG.SAMPLES_PER_CHAR;
@@ -208,17 +252,22 @@ class MalayalamAIEngine {
         offCanvas.width = offCanvas.height = S;
         const offCtx = offCanvas.getContext('2d', { willReadFrequently: true });
 
-        // Generate synthetic training samples
         for (let cIdx = 0; cIdx < MALAYALAM_CURRICULUM.length; cIdx++) {
             const letter = MALAYALAM_CURRICULUM[cIdx];
 
             for (let s = 0; s < AI_CONFIG.SAMPLES_PER_CHAR; s++) {
                 this._renderAugmentedChar(offCtx, letter.char, s, S);
-                const imgData = offCtx.getImageData(0, 0, S, S).data;
+                const rawImg = offCtx.getImageData(0, 0, S, S).data;
+
+                const rawFloats = new Float32Array(S * S);
+                for (let p = 0; p < S * S; p++) {
+                    rawFloats[p] = rawImg[p * 4] / 255.0;
+                }
+                const thickened = this._dilate2D(rawFloats, S, S, 1);
 
                 const offset = sampleIndex * S * S;
                 for (let p = 0; p < S * S; p++) {
-                    xsArray[offset + p] = imgData[p * 4] / 255.0;
+                    xsArray[offset + p] = thickened[p];
                 }
 
                 ysArray[sampleIndex * AI_CONFIG.NUM_CLASSES + cIdx] = 1.0;
@@ -247,16 +296,14 @@ class MalayalamAIEngine {
         xs.dispose();
         ys.dispose();
 
-        // Save to local IndexedDB
         try {
             await this.model.save(AI_CONFIG.MODEL_DB_KEY);
-            console.log('💾 Model saved to IndexedDB (v6)');
+            console.log('💾 Model saved to IndexedDB (v8)');
         } catch (e) {
             console.warn('Could not save to IndexedDB:', e);
         }
     }
 
-    // --- Render augmented synthetic character onto 48x48 canvas ---
     _renderAugmentedChar(ctx, char, sampleIdx, size) {
         ctx.fillStyle = '#000000';
         ctx.fillRect(0, 0, size, size);
@@ -268,17 +315,15 @@ class MalayalamAIEngine {
         tCtx.fillStyle = '#000000';
         tCtx.fillRect(0, 0, BIG, BIG);
 
-        // Pick font & weight
         const font = AI_CONFIG.FONTS[sampleIdx % AI_CONFIG.FONTS.length];
-        const weight = (sampleIdx % 3 === 0) ? 'bold' : 'normal';
+        const weight = (sampleIdx % 2 === 0) ? 'bold' : 'normal';
         const fontSize = Math.round(BIG * 0.65);
 
-        // Natural handwriting variation parameters
-        const rot = (Math.random() - 0.5) * 0.24;           // ±7 degrees
-        const scale = 0.84 + Math.random() * 0.30;          // 0.84x to 1.14x
-        const shiftX = (Math.random() - 0.5) * 6;           // translation
-        const shiftY = (Math.random() - 0.5) * 6;
-        const strokeMode = sampleIdx % 4;                   // 0=thin, 1=medium, 2=thick, 3=filled
+        const rot = (Math.random() - 0.5) * 0.20;
+        const scale = 0.85 + Math.random() * 0.26;
+        const shiftX = (Math.random() - 0.5) * 5;
+        const shiftY = (Math.random() - 0.5) * 5;
+        const strokeMode = sampleIdx % 4;
 
         tCtx.save();
         tCtx.translate(BIG / 2 + shiftX, BIG / 2 + shiftY);
@@ -291,19 +336,19 @@ class MalayalamAIEngine {
 
         if (strokeMode === 0) {
             tCtx.strokeStyle = '#ffffff';
-            tCtx.lineWidth = 3.5;
+            tCtx.lineWidth = 4.5;
             tCtx.lineCap = 'round';
             tCtx.lineJoin = 'round';
             tCtx.strokeText(char, 0, 0);
         } else if (strokeMode === 1) {
             tCtx.strokeStyle = '#ffffff';
-            tCtx.lineWidth = 6.5;
+            tCtx.lineWidth = 7.5;
             tCtx.lineCap = 'round';
             tCtx.lineJoin = 'round';
             tCtx.strokeText(char, 0, 0);
         } else if (strokeMode === 2) {
             tCtx.strokeStyle = '#ffffff';
-            tCtx.lineWidth = 9.5;
+            tCtx.lineWidth = 10.5;
             tCtx.lineCap = 'round';
             tCtx.lineJoin = 'round';
             tCtx.strokeText(char, 0, 0);
@@ -313,7 +358,6 @@ class MalayalamAIEngine {
         }
         tCtx.restore();
 
-        // Extract bounding box and draw centered into 48x48
         const bbox = this._findBBox(tCtx.getImageData(0, 0, BIG, BIG).data, BIG, BIG);
         if (bbox) {
             const PAD = Math.round(size * 0.12);
@@ -329,6 +373,27 @@ class MalayalamAIEngine {
         } else {
             ctx.drawImage(tempCanvas, 0, 0, BIG, BIG, 0, 0, size, size);
         }
+    }
+
+    _dilate2D(src, w, h, radius = 1) {
+        const dst = new Float32Array(w * h);
+        for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+                let maxVal = src[y * w + x];
+                for (let dy = -radius; dy <= radius; dy++) {
+                    for (let dx = -radius; dx <= radius; dx++) {
+                        const ny = y + dy;
+                        const nx = x + dx;
+                        if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
+                            const val = src[ny * w + nx];
+                            if (val > maxVal) maxVal = val;
+                        }
+                    }
+                }
+                dst[y * w + x] = maxVal;
+            }
+        }
+        return dst;
     }
 
     _findBBox(data, w, h) {
@@ -348,7 +413,6 @@ class MalayalamAIEngine {
         return found ? { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 } : null;
     }
 
-    // --- Preprocess user drawing on canvas into 48x48 tensor ---
     preprocessUserCanvas(userCanvas) {
         const S = AI_CONFIG.INPUT_SIZE;
         const userW = parseInt(userCanvas.style.width) || userCanvas.width;
@@ -362,7 +426,6 @@ class MalayalamAIEngine {
         rawCtx.drawImage(userCanvas, 0, 0, userCanvas.width, userCanvas.height, 0, 0, userW, userH);
         const rawData = rawCtx.getImageData(0, 0, userW, userH).data;
 
-        // Find bounding box of user strokes
         let minX = userW, minY = userH, maxX = 0, maxY = 0, hasStrokes = false;
         for (let y = 0; y < userH; y++) {
             for (let x = 0; x < userW; x++) {
@@ -386,7 +449,6 @@ class MalayalamAIEngine {
         const bboxH = maxY - minY + 1;
         if (bboxW < 10 && bboxH < 10) return null;
 
-        // Draw cropped & aspect-ratio centered into 48x48
         const tensorCanvas = document.createElement('canvas');
         tensorCanvas.width = tensorCanvas.height = S;
         const tCtx = tensorCanvas.getContext('2d');
@@ -410,36 +472,56 @@ class MalayalamAIEngine {
             tCtx.filter = 'none';
         }
 
-        // Convert to Float32Array tensor [1, 48, 48, 1]
         const finalData = tCtx.getImageData(0, 0, S, S).data;
-        const inputArr = new Float32Array(S * S);
+        const rawFloats = new Float32Array(S * S);
         for (let p = 0; p < S * S; p++) {
             const v = finalData[p * 4];
-            inputArr[p] = v > 20 ? Math.min(1.0, (v / 255.0) * 1.35) : 0.0;
+            rawFloats[p] = v > 25 ? Math.min(1.0, v / 255.0) : 0.0;
         }
 
-        return tf.tensor4d(inputArr, [1, S, S, 1]);
+        const thickened = this._dilate2D(rawFloats, S, S, 1);
+        return { tensor: tf.tensor4d(thickened, [1, S, S, 1]), userFloats: thickened };
     }
 
-    // --- Predict character probabilities ---
-    async predict(userCanvas) {
+    // --- Structural Shape Similarity Score ---
+    computeShapeSimilarity(userFloats, targetIndex) {
+        const refFloats = this.referenceTemplates.get(targetIndex);
+        if (!refFloats || !userFloats) return 0.5;
+
+        const S = AI_CONFIG.INPUT_SIZE;
+        let intersection = 0, union = 0;
+        for (let i = 0; i < S * S; i++) {
+            const u = userFloats[i] > 0.3 ? 1 : 0;
+            const r = refFloats[i] > 0.3 ? 1 : 0;
+            if (u && r) intersection++;
+            if (u || r) union++;
+        }
+        return union === 0 ? 0 : (intersection / union);
+    }
+
+    async predict(userCanvas, targetIndex) {
         if (!this.isReady || !this.model) return null;
 
-        let tensor = null;
+        let prep = null;
         try {
-            tensor = this.preprocessUserCanvas(userCanvas);
-            if (!tensor) return null;
+            prep = this.preprocessUserCanvas(userCanvas);
+            if (!prep) return null;
 
-            const predTensor = this.model.predict(tensor);
+            const predTensor = this.model.predict(prep.tensor);
             const probs = await predTensor.data();
             predTensor.dispose();
 
-            return Array.from(probs);
+            const shapeSim = this.computeShapeSimilarity(prep.userFloats, targetIndex);
+
+            return {
+                probabilities: Array.from(probs),
+                shapeSimilarity: shapeSim
+            };
         } catch (err) {
             console.error('Prediction error:', err);
             return null;
         } finally {
-            if (tensor) tensor.dispose();
+            if (prep && prep.tensor) prep.tensor.dispose();
         }
     }
 }
@@ -463,12 +545,12 @@ class MalayalamApp {
         this.drawnPointsCount = 0;
         this.strokeSegmentsCount = 0;
         this.totalStrokeLength = 0;
+        this.sharpTurnsCount = 0;
+        this.lastHeading = null;
+        this.lastSamplePos = null;
         this.lastPos = null;
     }
 
-    // ------------------------------------------
-    //  INIT
-    // ------------------------------------------
     init() {
         this.canvas = document.getElementById('drawing-canvas');
         if (this.canvas) {
@@ -480,7 +562,6 @@ class MalayalamApp {
         this.filterCategory('vowels');
         this.renderLibraryGrid();
 
-        // Initialize AI model in background
         this.ai.initialize((statusText, state) => {
             this._updateAIStatusBadge(statusText, state);
         });
@@ -507,9 +588,6 @@ class MalayalamApp {
         }
     }
 
-    // ------------------------------------------
-    //  CANVAS RESIZE
-    // ------------------------------------------
     resizeCanvas() {
         if (!this.canvas) return;
         const rect = this.canvas.parentElement.getBoundingClientRect();
@@ -522,9 +600,6 @@ class MalayalamApp {
         this.clearCanvas();
     }
 
-    // ------------------------------------------
-    //  CANVAS DRAWING EVENTS
-    // ------------------------------------------
     setupCanvasEvents() {
         const getPos = (e) => {
             const rect = this.canvas.getBoundingClientRect();
@@ -537,6 +612,8 @@ class MalayalamApp {
             e.preventDefault();
             this.isDrawing = true;
             this.lastPos = getPos(e);
+            this.lastSamplePos = this.lastPos;
+            this.lastHeading = null;
             this.strokeSegmentsCount++;
             this.sound.playStroke();
             this.hidePrompt();
@@ -550,6 +627,25 @@ class MalayalamApp {
             const dx = pos.x - this.lastPos.x;
             const dy = pos.y - this.lastPos.y;
             this.totalStrokeLength += Math.sqrt(dx * dx + dy * dy);
+
+            // Track sharp angular reversals (zigzag/scribble detection)
+            if (this.lastSamplePos) {
+                const sDx = pos.x - this.lastSamplePos.x;
+                const sDy = pos.y - this.lastSamplePos.y;
+                const sDist = Math.sqrt(sDx * sDx + sDy * sDy);
+                if (sDist >= 15) {
+                    const currentHeading = Math.atan2(sDy, sDx);
+                    if (this.lastHeading !== null) {
+                        let diff = Math.abs(currentHeading - this.lastHeading);
+                        if (diff > Math.PI) diff = 2 * Math.PI - diff;
+                        if (diff > 1.4) { // > 80 degrees sharp corner turn
+                            this.sharpTurnsCount++;
+                        }
+                    }
+                    this.lastHeading = currentHeading;
+                    this.lastSamplePos = pos;
+                }
+            }
 
             this.ctx.beginPath();
             this.ctx.moveTo(this.lastPos.x, this.lastPos.y);
@@ -567,6 +663,7 @@ class MalayalamApp {
         const stopDrawing = () => {
             this.isDrawing = false;
             this.lastPos = null;
+            this.lastSamplePos = null;
         };
 
         this.canvas.addEventListener('mousedown', startDrawing);
@@ -578,23 +675,20 @@ class MalayalamApp {
         this.canvas.addEventListener('touchend', stopDrawing);
     }
 
-    // ------------------------------------------
-    //  CLEAR CANVAS
-    // ------------------------------------------
     clearCanvas() {
         if (!this.ctx || !this.canvas) return;
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
         this.drawnPointsCount = 0;
         this.strokeSegmentsCount = 0;
         this.totalStrokeLength = 0;
+        this.sharpTurnsCount = 0;
+        this.lastHeading = null;
+        this.lastSamplePos = null;
         this.showPrompt();
         this.hideCheckResult();
         this.sound.playClear();
     }
 
-    // ------------------------------------------
-    //  PROMPT OVERLAY
-    // ------------------------------------------
     showPrompt() {
         const p = document.getElementById('canvas-prompt');
         if (p) p.style.opacity = '1';
@@ -604,9 +698,6 @@ class MalayalamApp {
         if (p) p.style.opacity = '0';
     }
 
-    // ------------------------------------------
-    //  UNDERLAY TOGGLE
-    // ------------------------------------------
     toggleUnderlay() {
         this.showUnderlay = !this.showUnderlay;
         const el = document.getElementById('canvas-underlay');
@@ -615,9 +706,6 @@ class MalayalamApp {
         if (btn) btn.classList.toggle('opacity-60', !this.showUnderlay);
     }
 
-    // ------------------------------------------
-    //  AUDIO PRONUNCIATION
-    // ------------------------------------------
     playAudio() {
         const letter = this.filteredList[this.currentIndex];
         if (!letter) return;
@@ -629,9 +717,6 @@ class MalayalamApp {
         }
     }
 
-    // ------------------------------------------
-    //  CATEGORY & NAVIGATION
-    // ------------------------------------------
     filterCategory(category) {
         this.currentCategory = category;
         const typeMap = { vowels: 'vowel', consonants: 'consonant', chillus: 'chillu' };
@@ -664,9 +749,6 @@ class MalayalamApp {
         this.clearCanvas();
     }
 
-    // ------------------------------------------
-    //  UPDATE CARD UI
-    // ------------------------------------------
     updateCard() {
         const letter = this.filteredList[this.currentIndex];
         if (!letter) return;
@@ -698,9 +780,6 @@ class MalayalamApp {
         if (el) el.textContent = text;
     }
 
-    // ------------------------------------------
-    //  UPDATE PROGRESS BAR
-    // ------------------------------------------
     updateProgressBar() {
         const total = this.filteredList.length;
         const pct = total ? Math.round(((this.currentIndex + 1) / total) * 100) : 0;
@@ -715,9 +794,6 @@ class MalayalamApp {
         if (bar) bar.style.width = `${pct}%`;
     }
 
-    // ------------------------------------------
-    //  NAVIGATE (tabs)
-    // ------------------------------------------
     navigateTo(view) {
         ['practice', 'library'].forEach(v => {
             const section = document.getElementById(`view-${v}`);
@@ -732,16 +808,10 @@ class MalayalamApp {
         });
     }
 
-    // ------------------------------------------
-    //  THEME TOGGLE
-    // ------------------------------------------
     toggleTheme() {
         document.documentElement.classList.toggle('dark');
     }
 
-    // ------------------------------------------
-    //  LIBRARY GRID
-    // ------------------------------------------
     renderLibraryGrid() {
         const grid = document.getElementById('library-grid');
         if (!grid) return;
@@ -784,6 +854,14 @@ class MalayalamApp {
         });
     }
 
+    _formatCandidates(list) {
+        if (!list || list.length === 0) return '';
+        const items = list.map(c => `"${c.char}" ("${c.roman}")`);
+        if (items.length === 1) return items[0];
+        if (items.length === 2) return `${items[0]} or ${items[1]}`;
+        return `${items.slice(0, -1).join(', ')}, or ${items[items.length - 1]}`;
+    }
+
     // ============================================================
     //  AI CHARACTER VERIFICATION ✨
     // ============================================================
@@ -800,31 +878,36 @@ class MalayalamApp {
         if (targetGlobalIndex < 0) return;
 
         if (!this.ai.isReady) {
-            this._showCheckResult('loading', '⏳ AI Model is initializing. Please try again in a few seconds...');
+            this._showCheckResult('loading', '⏳ AI Model is training. Please try again in 2 seconds...');
             return;
         }
 
-        // Geometric Scribble Guard (deterministic)
-        if (this.strokeSegmentsCount > 15 || this.totalStrokeLength > 3500) {
+        // 1. High-Accuracy Scribble & Zigzag Guard
+        const isScribble = this.sharpTurnsCount >= 3 ||
+                           this.strokeSegmentsCount > 12 ||
+                           this.totalStrokeLength > 2800;
+
+        if (isScribble) {
             this.sound.playWrong();
-            this._showCheckResult('wrong', `❌ Scribble detected! Please trace ${letter.char} carefully without excessive lines.`);
+            this._showCheckResult('wrong', `❌ Scribble detected! Please trace "${letter.char}" carefully without zigzag lines.`);
             return;
         }
 
-        this._showCheckResult('loading', '🔍 AI is evaluating your handwriting...');
+        this._showCheckResult('loading', '🔍 Evaluating your handwriting...');
         this.sound.playLoading();
 
-        // Run CNN Model Prediction
-        const probabilities = await this.ai.predict(this.canvas);
-        if (!probabilities) {
-            this._showCheckResult('wrong', `✏️ Please write the complete character ${letter.char}!`);
+        // Run Hybrid AI + Structural Evaluation
+        const evalResult = await this.ai.predict(this.canvas, targetGlobalIndex);
+        if (!evalResult) {
+            this._showCheckResult('wrong', `✏️ Please write the complete character "${letter.char}"!`);
             this.sound.playWrong();
             return;
         }
 
+        const probabilities = evalResult.probabilities;
+        const shapeSimilarity = evalResult.shapeSimilarity;
         const targetProb = probabilities[targetGlobalIndex] || 0;
 
-        // Rank predictions descending
         const ranked = probabilities.map((p, idx) => ({
             prob: p,
             idx,
@@ -836,55 +919,63 @@ class MalayalamApp {
         const top2 = ranked[1];
         const top3 = ranked[2];
 
-        console.log(`[AI Evaluation] Target: "${letter.char}" (${letter.roman}, idx ${targetGlobalIndex}) | Prob: ${(targetProb * 100).toFixed(1)}%`);
-        console.log('Top 3 Detected:', ranked.slice(0, 3).map(r => `"${r.char}" (${(r.prob * 100).toFixed(1)}%)`).join(', '));
+        console.log(`[Hybrid Eval] Target: "${letter.char}" (${letter.roman}) | CNN Prob: ${(targetProb * 100).toFixed(1)}% | Shape Sim: ${(shapeSimilarity * 100).toFixed(1)}%`);
+        console.log('Top Detected:', ranked.slice(0, 4).map(r => `"${r.char}" (${(r.prob * 100).toFixed(1)}%)`).join(', '));
 
-        // ── DECISION & SMART FEEDBACK (Calibrated for 56 classes) ──
-        // In a 56-class classifier, random chance is 1.78%.
-        // A Top-1 probability >= 10% is already dominant over other 55 classes.
+        const combinedScore = (targetProb * 0.70) + (shapeSimilarity * 0.30);
 
-        // Case 1: Target character is Top-1 prediction
-        if (top1.idx === targetGlobalIndex && targetProb >= 0.10) {
+        // ── DECISION LOGIC ────────────────────────────────────────
+
+        // Case 1: Target character is Correct (Top-1 OR strong structural + CNN consensus)
+        const isTargetTop1 = (top1.idx === targetGlobalIndex && targetProb >= 0.05);
+        const isStrongConsensus = (shapeSimilarity >= 0.22 && targetProb >= 0.04);
+
+        if (isTargetTop1 || isStrongConsensus) {
             this.sound.playCorrect();
-            const matchPct = Math.min(99, Math.round(78 + Math.min(1.0, targetProb / 0.35) * 21));
+            const matchPct = Math.min(99, Math.round(78 + Math.min(1.0, combinedScore / 0.25) * 21));
             this._showCheckResult('correct', `✅ Correct! Great job writing ${letter.char}! (${matchPct}% match)`);
             return;
         }
 
-        // Case 2: Target character is in Top-2 / Top-3
-        const isNearMatch = (top1.idx === targetGlobalIndex && targetProb < 0.10) ||
-                            (top2 && top2.idx === targetGlobalIndex && targetProb >= 0.06) ||
-                            (top3 && top3.idx === targetGlobalIndex && targetProb >= 0.04);
-
-        if (isNearMatch) {
-            this.sound.playWrong();
-            const matchPct = Math.round(48 + Math.min(1.0, targetProb / 0.10) * 22);
-            this._showCheckResult('almost', `⚠️ Almost There! Keep practising ${letter.char} (${matchPct}% match)`);
-            return;
-        }
-
-        // Case 3: Specific educational hints for twin pairs
+        // Case 2: Specific twin letter guidance
         if (letter.char === 'ആ' && top1.char === 'അ') {
             this.sound.playWrong();
-            this._showCheckResult('wrong', `❌ You wrote "അ" (a) instead of "ആ" (aa)! Don't forget the curved loop on the right! (25% match)`);
+            const suggestions = this._formatCandidates(ranked.slice(0, 2));
+            this._showCheckResult('wrong', `❌ That looks like ${suggestions} instead of "ആ" ("aa")! Remember to add the right-hand loop.`);
             return;
         }
         if (letter.char === 'അ' && top1.char === 'ആ') {
             this.sound.playWrong();
-            this._showCheckResult('wrong', `❌ You wrote "ആ" (aa) instead of "അ" (a)! "അ" doesn't have the long right loop. (25% match)`);
+            const suggestions = this._formatCandidates(ranked.slice(0, 2));
+            this._showCheckResult('wrong', `❌ That looks like ${suggestions} instead of "അ" ("a")! "അ" does not have the extra loop on the right.`);
             return;
         }
 
-        // Case 4: Other detected character or mismatch
-        const detectedInfo = (top1 && top1.prob >= 0.20) ? ` (looks closer to "${top1.char}")` : '';
-        const matchPct = Math.max(5, Math.round(targetProb * 30));
+        // Case 3: Near Match / Target was in top 3
+        const isNear = (top2 && top2.idx === targetGlobalIndex && targetProb >= 0.04) ||
+                       (top3 && top3.idx === targetGlobalIndex && targetProb >= 0.03);
+
+        if (isNear) {
+            this.sound.playWrong();
+            const matchPct = Math.round(50 + Math.min(1.0, combinedScore / 0.15) * 20);
+            const suggestions = this._formatCandidates(ranked.filter(r => r.idx !== targetGlobalIndex).slice(0, 2));
+            this._showCheckResult('almost', `⚠️ Almost there! It currently resembles ${suggestions}. Keep practising "${letter.char}"! (${matchPct}% match)`);
+            return;
+        }
+
+        // Case 4: Clearly drew other letters -> Show all top matching candidate letters
         this.sound.playWrong();
-        this._showCheckResult('wrong', `❌ Try Again! Trace ${letter.char} more carefully${detectedInfo} (${matchPct}% match)`);
+        const topOthers = ranked.filter(r => r.idx !== targetGlobalIndex && r.prob >= 0.04).slice(0, 3);
+        const candidates = topOthers.length > 0 ? topOthers : ranked.filter(r => r.idx !== targetGlobalIndex).slice(0, 2);
+        const candidateStr = this._formatCandidates(candidates);
+
+        if (candidateStr) {
+            this._showCheckResult('wrong', `❌ That looks like ${candidateStr} instead of "${letter.char}" ("${letter.roman}")! Try tracing "${letter.char}" carefully.`);
+        } else {
+            this._showCheckResult('wrong', `❌ Try Again! Trace "${letter.char}" more carefully without extra strokes.`);
+        }
     }
 
-    // ------------------------------------------
-    //  CHECK RESULT BANNER
-    // ------------------------------------------
     _showCheckResult(type, message) {
         const el = document.getElementById('check-result');
         if (!el) return;
