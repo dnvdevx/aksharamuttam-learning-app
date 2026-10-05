@@ -1,15 +1,15 @@
 // =============================================
 //  THANIMA MALAYALAM LEARNING CANVAS
-//  Deep Learning AI-Powered Character Verification (v4)
+//  High-Accuracy AI CNN Character Recognition Engine (v6)
 // =============================================
 
 const AI_CONFIG = {
     INPUT_SIZE: 48,                    // 48x48 CNN input tensor
     NUM_CLASSES: 56,                   // All 56 Malayalam characters (15 vowels + 36 consonants + 5 chillus)
-    SAMPLES_PER_CHAR: 80,              // 80 synthetic variations per character (~4,480 total samples)
-    EPOCHS: 20,                        // Training epochs
+    SAMPLES_PER_CHAR: 140,             // 140 rich synthetic variations per character (~7,840 total samples)
+    EPOCHS: 28,                        // High-accuracy training epochs
     BATCH_SIZE: 64,
-    MODEL_DB_KEY: 'indexeddb://thanima-malayalam-cnn-v5',
+    MODEL_DB_KEY: 'indexeddb://thanima-malayalam-cnn-v6',
     FONTS: ['Gayathri', 'Manjari', 'Chilanka', 'Noto Sans Malayalam', 'sans-serif'],
 };
 
@@ -75,35 +75,24 @@ class MalayalamAIEngine {
         try {
             await tf.ready();
 
-            // 1. First priority: Load static pre-trained model file (instant <80ms load on Vercel/production)
-            try {
-                this.model = await tf.loadLayersModel('./model/model.json');
-                console.log('✅ Loaded pre-trained static model from ./model/model.json');
-                this.isReady = true;
-                this._updateStatus('AI Ready ✅', 'ready', onStatusChange);
-                return;
-            } catch (_) {
-                // Static file not present, check local IndexedDB
-            }
-
-            // 2. Second priority: Load cached trained model from local IndexedDB
+            // 1. Try loading cached trained model from local IndexedDB
             try {
                 this.model = await tf.loadLayersModel(AI_CONFIG.MODEL_DB_KEY);
-                console.log('✅ Loaded cached Malayalam CNN model (v5) from IndexedDB');
+                console.log('✅ Loaded high-accuracy Malayalam CNN model (v6) from IndexedDB');
                 this.isReady = true;
                 this._updateStatus('AI Ready ✅', 'ready', onStatusChange);
                 return;
             } catch (_) {
-                console.log('ℹ️ No cached model found. Preparing to train high-accuracy CNN...');
+                console.log('ℹ️ Preparing to train new high-accuracy CNN model...');
             }
 
             this.isTraining = true;
             this._updateStatus('Loading Malayalam Fonts...', 'training', onStatusChange);
 
-            // Explicitly preload Malayalam fonts for all curriculum letters
+            // Preload Malayalam fonts
             await this._preloadFonts();
 
-            this._updateStatus('Training AI Model (~3s)...', 'training', onStatusChange);
+            this._updateStatus('Training AI Model (please wait a few seconds)...', 'training', onStatusChange);
             await this._buildAndTrainModel(onStatusChange);
 
             this.isReady = true;
@@ -114,16 +103,6 @@ class MalayalamAIEngine {
             console.error('AI Initialization failed:', err);
             this._updateStatus('AI Error', 'error', onStatusChange);
         }
-    }
-
-    // Helper to download/export the trained model as files for static hosting
-    async exportModel() {
-        if (!this.model) {
-            console.warn('No model available to export.');
-            return;
-        }
-        await this.model.save('downloads://thanima-malayalam-cnn-model');
-        console.log('📥 Triggered model download (model.json + weights.bin). Place them in a "model" folder for instant loading!');
     }
 
     async _preloadFonts() {
@@ -200,15 +179,15 @@ class MalayalamAIEngine {
         model.add(tf.layers.maxPooling2d({ poolSize: 2 }));
         model.add(tf.layers.dropout({ rate: 0.25 }));
 
-        // Fully Connected
+        // Dense Classifier
         model.add(tf.layers.flatten());
-        model.add(tf.layers.dense({ units: 192, activation: 'relu' }));
+        model.add(tf.layers.dense({ units: 256, activation: 'relu' }));
         model.add(tf.layers.batchNormalization());
         model.add(tf.layers.dropout({ rate: 0.35 }));
         model.add(tf.layers.dense({ units: AI_CONFIG.NUM_CLASSES, activation: 'softmax' }));
 
         model.compile({
-            optimizer: tf.train.adam(0.0012),
+            optimizer: tf.train.adam(0.001),
             loss: 'categoricalCrossentropy',
             metrics: ['accuracy']
         });
@@ -229,7 +208,7 @@ class MalayalamAIEngine {
         offCanvas.width = offCanvas.height = S;
         const offCtx = offCanvas.getContext('2d', { willReadFrequently: true });
 
-        // Generate synthetic samples across all 30 characters
+        // Generate synthetic training samples
         for (let cIdx = 0; cIdx < MALAYALAM_CURRICULUM.length; cIdx++) {
             const letter = MALAYALAM_CURRICULUM[cIdx];
 
@@ -239,10 +218,9 @@ class MalayalamAIEngine {
 
                 const offset = sampleIndex * S * S;
                 for (let p = 0; p < S * S; p++) {
-                    xsArray[offset + p] = imgData[p * 4] / 255.0; // Grayscale normalized
+                    xsArray[offset + p] = imgData[p * 4] / 255.0;
                 }
 
-                // One-hot label
                 ysArray[sampleIndex * AI_CONFIG.NUM_CLASSES + cIdx] = 1.0;
                 sampleIndex++;
             }
@@ -261,7 +239,7 @@ class MalayalamAIEngine {
                 onEpochEnd: (epoch, logs) => {
                     const pct = Math.round(((epoch + 1) / AI_CONFIG.EPOCHS) * 100);
                     const acc = Math.round((logs.acc || 0) * 100);
-                    this._updateStatus(`AI Training ${pct}% (Acc: ${acc}%)...`, 'training', onStatusChange);
+                    this._updateStatus(`AI Training ${pct}% (Accuracy: ${acc}%)...`, 'training', onStatusChange);
                 }
             }
         });
@@ -269,10 +247,10 @@ class MalayalamAIEngine {
         xs.dispose();
         ys.dispose();
 
-        // Save model to IndexedDB
+        // Save to local IndexedDB
         try {
             await this.model.save(AI_CONFIG.MODEL_DB_KEY);
-            console.log('💾 Model saved to IndexedDB');
+            console.log('💾 Model saved to IndexedDB (v6)');
         } catch (e) {
             console.warn('Could not save to IndexedDB:', e);
         }
@@ -296,9 +274,9 @@ class MalayalamAIEngine {
         const fontSize = Math.round(BIG * 0.65);
 
         // Natural handwriting variation parameters
-        const rot = (Math.random() - 0.5) * 0.22;           // ±6.5 degrees
-        const scale = 0.85 + Math.random() * 0.28;          // 0.85x to 1.13x
-        const shiftX = (Math.random() - 0.5) * 6;           // subtle translation
+        const rot = (Math.random() - 0.5) * 0.24;           // ±7 degrees
+        const scale = 0.84 + Math.random() * 0.30;          // 0.84x to 1.14x
+        const shiftX = (Math.random() - 0.5) * 6;           // translation
         const shiftY = (Math.random() - 0.5) * 6;
         const strokeMode = sampleIdx % 4;                   // 0=thin, 1=medium, 2=thick, 3=filled
 
@@ -313,19 +291,19 @@ class MalayalamAIEngine {
 
         if (strokeMode === 0) {
             tCtx.strokeStyle = '#ffffff';
-            tCtx.lineWidth = 4;
+            tCtx.lineWidth = 3.5;
             tCtx.lineCap = 'round';
             tCtx.lineJoin = 'round';
             tCtx.strokeText(char, 0, 0);
         } else if (strokeMode === 1) {
             tCtx.strokeStyle = '#ffffff';
-            tCtx.lineWidth = 7;
+            tCtx.lineWidth = 6.5;
             tCtx.lineCap = 'round';
             tCtx.lineJoin = 'round';
             tCtx.strokeText(char, 0, 0);
         } else if (strokeMode === 2) {
             tCtx.strokeStyle = '#ffffff';
-            tCtx.lineWidth = 10;
+            tCtx.lineWidth = 9.5;
             tCtx.lineCap = 'round';
             tCtx.lineJoin = 'round';
             tCtx.strokeText(char, 0, 0);
@@ -437,8 +415,7 @@ class MalayalamAIEngine {
         const inputArr = new Float32Array(S * S);
         for (let p = 0; p < S * S; p++) {
             const v = finalData[p * 4];
-            // Normalize with mild threshold enhancement for clean handwriting lines
-            inputArr[p] = v > 20 ? Math.min(1.0, (v / 255.0) * 1.3) : 0.0;
+            inputArr[p] = v > 20 ? Math.min(1.0, (v / 255.0) * 1.35) : 0.0;
         }
 
         return tf.tensor4d(inputArr, [1, S, S, 1]);
@@ -823,11 +800,11 @@ class MalayalamApp {
         if (targetGlobalIndex < 0) return;
 
         if (!this.ai.isReady) {
-            this._showCheckResult('loading', '⏳ AI Model is still training. Please try again in 2 seconds...');
+            this._showCheckResult('loading', '⏳ AI Model is initializing. Please try again in a few seconds...');
             return;
         }
 
-        // Geometric Scribble Guard (deterministic - does not distort CNN confidence)
+        // Geometric Scribble Guard (deterministic)
         if (this.strokeSegmentsCount > 15 || this.totalStrokeLength > 3500) {
             this.sound.playWrong();
             this._showCheckResult('wrong', `❌ Scribble detected! Please trace ${letter.char} carefully without excessive lines.`);
@@ -862,29 +839,31 @@ class MalayalamApp {
         console.log(`[AI Evaluation] Target: "${letter.char}" (${letter.roman}, idx ${targetGlobalIndex}) | Prob: ${(targetProb * 100).toFixed(1)}%`);
         console.log('Top 3 Detected:', ranked.slice(0, 3).map(r => `"${r.char}" (${(r.prob * 100).toFixed(1)}%)`).join(', '));
 
-        // ── DECISION & SMART FEEDBACK ─────────────────────────────
+        // ── DECISION & SMART FEEDBACK (Calibrated for 56 classes) ──
+        // In a 56-class classifier, random chance is 1.78%.
+        // A Top-1 probability >= 10% is already dominant over other 55 classes.
 
-        // Case 1: Target character is Top-1 with solid confidence
-        if (top1.idx === targetGlobalIndex && targetProb >= 0.30) {
+        // Case 1: Target character is Top-1 prediction
+        if (top1.idx === targetGlobalIndex && targetProb >= 0.10) {
             this.sound.playCorrect();
-            const matchPct = Math.min(99, Math.round(75 + targetProb * 24));
+            const matchPct = Math.min(99, Math.round(78 + Math.min(1.0, targetProb / 0.35) * 21));
             this._showCheckResult('correct', `✅ Correct! Great job writing ${letter.char}! (${matchPct}% match)`);
             return;
         }
 
-        // Case 2: Target character is Top-1 with lower confidence OR in Top-2
-        const isNearMatch = (top1.idx === targetGlobalIndex && targetProb < 0.30) ||
-                            (top2 && top2.idx === targetGlobalIndex && targetProb >= 0.18) ||
-                            (top3 && top3.idx === targetGlobalIndex && targetProb >= 0.12);
+        // Case 2: Target character is in Top-2 / Top-3
+        const isNearMatch = (top1.idx === targetGlobalIndex && targetProb < 0.10) ||
+                            (top2 && top2.idx === targetGlobalIndex && targetProb >= 0.06) ||
+                            (top3 && top3.idx === targetGlobalIndex && targetProb >= 0.04);
 
         if (isNearMatch) {
             this.sound.playWrong();
-            const matchPct = Math.round(40 + targetProb * 35);
+            const matchPct = Math.round(48 + Math.min(1.0, targetProb / 0.10) * 22);
             this._showCheckResult('almost', `⚠️ Almost There! Keep practising ${letter.char} (${matchPct}% match)`);
             return;
         }
 
-        // Case 3: Specific helpful educational feedback (e.g. wrote 'അ' instead of 'ആ')
+        // Case 3: Specific educational hints for twin pairs
         if (letter.char === 'ആ' && top1.char === 'അ') {
             this.sound.playWrong();
             this._showCheckResult('wrong', `❌ You wrote "അ" (a) instead of "ആ" (aa)! Don't forget the curved loop on the right! (25% match)`);
@@ -897,7 +876,7 @@ class MalayalamApp {
         }
 
         // Case 4: Other detected character or mismatch
-        const detectedInfo = (top1 && top1.prob >= 0.25) ? ` (looks closer to "${top1.char}")` : '';
+        const detectedInfo = (top1 && top1.prob >= 0.20) ? ` (looks closer to "${top1.char}")` : '';
         const matchPct = Math.max(5, Math.round(targetProb * 30));
         this.sound.playWrong();
         this._showCheckResult('wrong', `❌ Try Again! Trace ${letter.char} more carefully${detectedInfo} (${matchPct}% match)`);
