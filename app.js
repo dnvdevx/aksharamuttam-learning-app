@@ -600,8 +600,8 @@ class MalayalamApp {
         if (this.canvas) {
             this.ctx = this.canvas.getContext('2d');
             this.setupCanvasEvents();
-            this.resizeCanvas();
-            window.addEventListener('resize', () => this.resizeCanvas());
+            this.resizeCanvas(true);
+            window.addEventListener('resize', () => this.resizeCanvas(false));
         }
         this.filterCategory('vowels');
         this.renderLibraryGrid();
@@ -637,16 +637,41 @@ class MalayalamApp {
         }
     }
 
-    resizeCanvas() {
+    resizeCanvas(forceClear = false) {
         if (!this.canvas) return;
         const rect = this.canvas.parentElement.getBoundingClientRect();
         const dpr = window.devicePixelRatio || 1;
-        this.canvas.width = rect.width * dpr;
-        this.canvas.height = rect.height * dpr;
+        const newWidth = Math.round(rect.width * dpr);
+        const newHeight = Math.round(rect.height * dpr);
+
+        if (newWidth === 0 || newHeight === 0) return;
+
+        // If canvas dimensions haven't changed, don't reset or clear anything
+        if (this.canvas.width === newWidth && this.canvas.height === newHeight && !forceClear) {
+            return;
+        }
+
+        // Save existing drawing across layout shifts
+        let tempCanvas = null;
+        if (this.canvas.width > 0 && this.canvas.height > 0 && this.drawnPointsCount > 0 && !forceClear) {
+            tempCanvas = document.createElement('canvas');
+            tempCanvas.width = this.canvas.width;
+            tempCanvas.height = this.canvas.height;
+            const tCtx = tempCanvas.getContext('2d');
+            tCtx.drawImage(this.canvas, 0, 0);
+        }
+
+        this.canvas.width = newWidth;
+        this.canvas.height = newHeight;
         this.canvas.style.width = `${rect.width}px`;
         this.canvas.style.height = `${rect.height}px`;
         if (this.ctx) this.ctx.scale(dpr, dpr);
-        this.clearCanvas();
+
+        if (tempCanvas && !forceClear) {
+            this.ctx.drawImage(tempCanvas, 0, 0, newWidth / dpr, newHeight / dpr);
+        } else if (forceClear) {
+            this.clearCanvas();
+        }
     }
 
     setupCanvasEvents() {
@@ -748,6 +773,7 @@ class MalayalamApp {
         this.currentIndex = 0;
         this.updateCard();
         this.updateProgressBar();
+        this.clearCanvas();
         const sel = document.getElementById('category-select');
         if (sel) sel.value = category;
     }
@@ -1084,7 +1110,10 @@ class MalayalamApp {
 
         if (isTargetTop1 || isStrongConsensus) {
             this.sound.playCorrect();
-            const matchPct = Math.min(99, Math.round(78 + Math.min(1.0, combinedScore / 0.25) * 21));
+            let matchPct = Math.min(100, Math.round(78 + Math.min(1.0, combinedScore / 0.25) * 22));
+            if (matchPct >= 96) {
+                matchPct = 100;
+            }
             this._showCheckResult('correct', `✅ Correct! Great job writing ${letter.char}! (${matchPct}% match)`);
             return;
         }
