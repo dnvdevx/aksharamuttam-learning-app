@@ -1830,11 +1830,11 @@ class MalayalamApp {
             return;
         }
 
-        if (!confirm(`Are you sure you want to reset offline points for student ${regNo} to 0?`)) {
+        if (!confirm(`Are you sure you want to reset all points (both online practice and offline) for student ${regNo} to 0?`)) {
             return;
         }
 
-        const res = await window.thanimaAuth.resetStudentPoints(regNo, 'offline');
+        const res = await window.thanimaAuth.resetStudentPoints(regNo, 'all');
         if (!res.success) {
             if (fb) {
                 fb.textContent = res.error || 'Failed to reset points.';
@@ -1845,7 +1845,7 @@ class MalayalamApp {
         }
 
         if (fb) {
-            fb.textContent = `✓ Successfully reset offline points for ${res.user.name} (${res.user.regNo}) to 0.`;
+            fb.textContent = `✓ Successfully reset all points for ${res.user.name} (${res.user.regNo}) to 0.`;
             fb.className = 'my-3 p-3 rounded-xl text-xs font-bold text-center bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300';
             fb.classList.remove('hidden');
         }

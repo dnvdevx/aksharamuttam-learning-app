@@ -55,6 +55,56 @@ class ThanimaAuthStore {
         this._initFirebase();
     }
 
+    _reconcileUserPoints(user) {
+        if (!user) return user;
+
+        // Normalize regNo
+        if (user.regNo) user.regNo = String(user.regNo).trim().toUpperCase();
+
+        // Normalize online points (handles if someone set "onlinePoints", "points", or numeric string in Firebase)
+        let online = 0;
+        if (user.onlinePoints !== undefined && user.onlinePoints !== null) {
+            online = parseInt(user.onlinePoints, 10) || 0;
+        } else if (user.points !== undefined && user.points !== null) {
+            online = parseInt(user.points, 10) || 0;
+        }
+        user.onlinePoints = Math.max(0, online);
+
+        // Normalize offline points
+        user.offlinePoints = Math.max(0, parseInt(user.offlinePoints || 0, 10) || 0);
+
+        // Normalize characterPoints map
+        if (user.characterPoints && typeof user.characterPoints === 'object' && !Array.isArray(user.characterPoints)) {
+            const cleanCharPoints = {};
+            let sum = 0;
+            for (const charId in user.characterPoints) {
+                const val = Math.max(0, parseInt(user.characterPoints[charId] || 0, 10) || 0);
+                if (val > 0) {
+                    cleanCharPoints[charId] = val;
+                    sum += val;
+                }
+            }
+
+            // If user's onlinePoints in Firebase was set to 0, all character points are strictly 0!
+            if (user.onlinePoints === 0) {
+                user.characterPoints = {};
+            } else if (sum > user.onlinePoints) {
+                // If admin lowered onlinePoints in Firebase (e.g. from 8 down to 2),
+                // individual character points must be capped so they never exceed the new total!
+                for (const charId in cleanCharPoints) {
+                    cleanCharPoints[charId] = Math.min(cleanCharPoints[charId], user.onlinePoints);
+                }
+                user.characterPoints = cleanCharPoints;
+            } else {
+                user.characterPoints = cleanCharPoints;
+            }
+        } else {
+            user.characterPoints = {};
+        }
+
+        return user;
+    }
+
     _initFirebase() {
         if (typeof firebase !== 'undefined' && window.THANIMA_FIREBASE_CONFIG &&
             window.THANIMA_FIREBASE_CONFIG.apiKey && window.THANIMA_FIREBASE_CONFIG.apiKey !== 'YOUR_API_KEY') {
@@ -80,7 +130,13 @@ class ThanimaAuthStore {
                 this.db.collection('users').onSnapshot(snapshot => {
                     const cloudUsers = [];
                     snapshot.forEach(doc => {
-                        cloudUsers.push(doc.data());
+                        const raw = doc.data() || {};
+                        const regNo = (raw.regNo || doc.id).toUpperCase();
+                        const reconciled = this._reconcileUserPoints({
+                            ...raw,
+                            regNo
+                        });
+                        cloudUsers.push(reconciled);
                     });
 
                     // Retain master admin locally even if cloud only has student docs
@@ -434,9 +490,9 @@ class ThanimaAuthStore {
         const userIdx = users.findIndex(u => u.regNo.toUpperCase() === sessionUser.regNo.toUpperCase());
         if (userIdx === -1) return { loggedIn: false, pointsEarned: 0 };
 
-        const user = users[userIdx];
+        const user = this._reconcileUserPoints(users[userIdx]);
         user.characterPoints = user.characterPoints || {};
-        const currentPointsForChar = user.characterPoints[charId] || 0;
+        const currentPointsForChar = this.getCharacterPoints(charId);
 
         const maxPointsPerChar = 20;
         const availableHeadroom = Math.max(0, maxPointsPerChar - currentPointsForChar);
@@ -457,18 +513,28 @@ class ThanimaAuthStore {
         return {
             loggedIn: true,
             pointsEarned: pointsToAward,
-            charTotal: user.characterPoints[charId] || 0,
+            charTotal: this.getCharacterPoints(charId),
             maxCharPoints: maxPointsPerChar,
             totalOnlinePoints: user.onlinePoints || 0,
             grandTotal: (user.onlinePoints || 0) + (user.offlinePoints || 0),
-            isMaxReached: ((user.characterPoints[charId] || 0) >= maxPointsPerChar)
+            isMaxReached: (this.getCharacterPoints(charId) >= maxPointsPerChar)
         };
     }
 
     getCharacterPoints(charId) {
         const user = this.getCurrentUser();
-        if (!user || !user.characterPoints) return 0;
-        return user.characterPoints[charId] || 0;
+        if (!user || user.role === 'admin') return 0;
+
+        const online = Math.max(0, parseInt(user.onlinePoints !== undefined ? user.onlinePoints : (user.points || 0), 10) || 0);
+        if (online === 0) return 0;
+
+        if (!user.characterPoints || typeof user.characterPoints !== 'object') {
+            return Math.min(online, 20);
+        }
+
+        const pts = parseInt(user.characterPoints[charId] || 0, 10) || 0;
+        // Points on any single character can NEVER exceed the student's total online points
+        return Math.min(pts, online);
     }
 
     async addOfflinePoints(regNo, points, remark, studentNameIfNew = '') {
