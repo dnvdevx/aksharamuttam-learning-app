@@ -25,70 +25,12 @@ class ThanimaAuthStore {
     }
 
     async init() {
-        // Ensure initial demo data with secure hashes exists
+        // Load registered users (zero fake accounts)
         let users = this._getUsers();
-        if (users.length === 0) {
-            const demoSalt = this._generateSalt();
-            const demoHash = await this._hashPassword('pass123', demoSalt);
 
-            users = [
-                {
-                    regNo: '23BCE1042',
-                    name: 'Ananya Nair',
-                    passwordHash: demoHash,
-                    salt: demoSalt,
-                    role: 'student',
-                    onlinePoints: 85,
-                    offlinePoints: 40,
-                    characterPoints: { 'v-1': 20, 'v-2': 20, 'v-3': 20, 'v-4': 15, 'v-5': 10 },
-                    offlineEvents: ['Class 1 - Introduction', 'Workshop 1 - Vowels Tracing']
-                },
-                {
-                    regNo: '22BCS2180',
-                    name: 'Rahul Menokh',
-                    passwordHash: demoHash,
-                    salt: demoSalt,
-                    role: 'student',
-                    onlinePoints: 70,
-                    offlinePoints: 65,
-                    characterPoints: { 'v-1': 20, 'v-2': 15, 'v-3': 15, 'v-4': 20 },
-                    offlineEvents: ['Class 1 & 2 Attendance', 'Cultural Club Meeting']
-                },
-                {
-                    regNo: '24BIT3091',
-                    name: 'Devika Pillai',
-                    passwordHash: demoHash,
-                    salt: demoSalt,
-                    role: 'student',
-                    onlinePoints: 95,
-                    offlinePoints: 20,
-                    characterPoints: { 'v-1': 20, 'v-2': 20, 'v-3': 20, 'v-4': 20, 'v-5': 15 },
-                    offlineEvents: ['Orientation Meetup']
-                },
-                {
-                    regNo: '23BEE4012',
-                    name: 'Adithya Kurup',
-                    passwordHash: demoHash,
-                    salt: demoSalt,
-                    role: 'student',
-                    onlinePoints: 45,
-                    offlinePoints: 50,
-                    characterPoints: { 'v-1': 15, 'v-2': 15, 'v-3': 15 },
-                    offlineEvents: ['Offline Class 1', 'Alphabetical Quiz Meet']
-                },
-                {
-                    regNo: '22BME1105',
-                    name: 'Meenakshi Suresh',
-                    passwordHash: demoHash,
-                    salt: demoSalt,
-                    role: 'student',
-                    onlinePoints: 60,
-                    offlinePoints: 30,
-                    characterPoints: { 'v-1': 20, 'v-2': 20, 'v-3': 20 },
-                    offlineEvents: ['Class 1 Attendance']
-                }
-            ];
-        }
+        // Purge any legacy demo dummy accounts
+        const demoRegNos = ['23BCE1042', '22BCS2180', '24BIT3091', '23BEE4012', '22BME1105'];
+        users = users.filter(u => !demoRegNos.includes(u.regNo) || Boolean(u.createdAt));
 
         // Always ensure Master Admin account thanima@admin is present with secure hash
         let master = users.find(u => u.regNo.toUpperCase() === this.MASTER_ADMIN_ID);
