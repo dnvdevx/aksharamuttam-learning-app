@@ -139,7 +139,7 @@ class MalayalamAIEngine {
         if (callback) callback(text, state);
     }
 
-    // --- Generate Reference Shape Templates ---
+    // --- Generate Reference Shape Templates & Distance Fields ---
     _generateReferenceTemplates() {
         const S = AI_CONFIG.INPUT_SIZE;
         const offCanvas = document.createElement('canvas');
@@ -154,8 +154,41 @@ class MalayalamAIEngine {
             for (let p = 0; p < S * S; p++) {
                 floats[p] = data[p * 4] > 30 ? 1.0 : 0.0;
             }
-            this.referenceTemplates.set(i, floats);
+            const dist = this._computeDistanceField(floats, S);
+            this.referenceTemplates.set(i, { floats, dist });
         }
+    }
+
+    _computeDistanceField(binaryMask, S) {
+        const INF = 999;
+        const dist = new Float32Array(S * S);
+        for (let i = 0; i < S * S; i++) {
+            dist[i] = binaryMask[i] > 0.25 ? 0 : INF;
+        }
+
+        // Forward pass (top-left to bottom-right)
+        for (let y = 0; y < S; y++) {
+            for (let x = 0; x < S; x++) {
+                const idx = y * S + x;
+                if (x > 0) dist[idx] = Math.min(dist[idx], dist[idx - 1] + 1);
+                if (y > 0) dist[idx] = Math.min(dist[idx], dist[(y - 1) * S + x] + 1);
+                if (x > 0 && y > 0) dist[idx] = Math.min(dist[idx], dist[(y - 1) * S + (x - 1)] + 1.414);
+                if (x < S - 1 && y > 0) dist[idx] = Math.min(dist[idx], dist[(y - 1) * S + (x + 1)] + 1.414);
+            }
+        }
+
+        // Backward pass (bottom-right to top-left)
+        for (let y = S - 1; y >= 0; y--) {
+            for (let x = S - 1; x >= 0; x--) {
+                const idx = y * S + x;
+                if (x < S - 1) dist[idx] = Math.min(dist[idx], dist[idx + 1] + 1);
+                if (y < S - 1) dist[idx] = Math.min(dist[idx], dist[(y + 1) * S + x] + 1);
+                if (x < S - 1 && y < S - 1) dist[idx] = Math.min(dist[idx], dist[(y + 1) * S + (x + 1)] + 1.414);
+                if (x > 0 && y < S - 1) dist[idx] = Math.min(dist[idx], dist[(y + 1) * S + (x - 1)] + 1.414);
+            }
+        }
+
+        return dist;
     }
 
     _renderCleanChar(ctx, char, size) {
@@ -426,20 +459,21 @@ class MalayalamAIEngine {
 
     preprocessUserCanvas(userCanvas) {
         const S = AI_CONFIG.INPUT_SIZE;
-        const userW = parseInt(userCanvas.style.width) || userCanvas.width;
-        const userH = parseInt(userCanvas.style.height) || userCanvas.height;
+        const W = userCanvas.width;
+        const H = userCanvas.height;
+        if (!W || !H) return null;
 
         const raw = document.createElement('canvas');
-        raw.width = userW;
-        raw.height = userH;
+        raw.width = W;
+        raw.height = H;
         const rawCtx = raw.getContext('2d', { willReadFrequently: true });
-        rawCtx.drawImage(userCanvas, 0, 0, userCanvas.width, userCanvas.height, 0, 0, userW, userH);
-        const rawData = rawCtx.getImageData(0, 0, userW, userH).data;
+        rawCtx.drawImage(userCanvas, 0, 0);
+        const rawData = rawCtx.getImageData(0, 0, W, H).data;
 
-        let minX = userW, minY = userH, maxX = 0, maxY = 0, hasStrokes = false;
-        for (let y = 0; y < userH; y++) {
-            for (let x = 0; x < userW; x++) {
-                const i = (y * userW + x) * 4;
+        let minX = W, minY = H, maxX = 0, maxY = 0, hasStrokes = false;
+        for (let y = 0; y < H; y++) {
+            for (let x = 0; x < W; x++) {
+                const i = (y * W + x) * 4;
                 const a = rawData[i + 3];
                 if (a > 20) {
                     if (x < minX) minX = x;
@@ -459,13 +493,13 @@ class MalayalamAIEngine {
 
         // Create pure high-contrast binary mask (white on black) - 100% iOS Safari & cross-browser compatible
         const maskCanvas = document.createElement('canvas');
-        maskCanvas.width = userW;
-        maskCanvas.height = userH;
+        maskCanvas.width = W;
+        maskCanvas.height = H;
         const mCtx = maskCanvas.getContext('2d', { willReadFrequently: true });
         mCtx.fillStyle = '#000000';
-        mCtx.fillRect(0, 0, userW, userH);
+        mCtx.fillRect(0, 0, W, H);
 
-        const maskImg = mCtx.getImageData(0, 0, userW, userH);
+        const maskImg = mCtx.getImageData(0, 0, W, H);
         for (let i = 0; i < rawData.length; i += 4) {
             if (rawData[i + 3] > 20) {
                 maskImg.data[i] = 255;     // R
@@ -514,20 +548,51 @@ class MalayalamAIEngine {
         return dst;
     }
 
-    // --- Structural Shape Similarity Score ---
-    computeShapeSimilarity(userFloats, targetIndex) {
-        const refFloats = this.referenceTemplates.get(targetIndex);
-        if (!refFloats || !userFloats) return 0.5;
+    // --- Structural Shape Evaluation (Precision, Coverage & Chamfer Score) ---
+    computeShapeScore(userFloats, targetIndex) {
+        const refData = this.referenceTemplates.get(targetIndex);
+        if (!refData || !userFloats) return { score: 0.5, precision: 0.5, coverage: 0.5 };
 
+        const { floats: refFloats, dist: refDist } = refData;
         const S = AI_CONFIG.INPUT_SIZE;
-        let intersection = 0, union = 0;
+        const userDist = this._computeDistanceField(userFloats, S);
+
+        // 1. Precision: Penalizes stray/deformed loops drawn into empty space
+        const D_MAX = 5.0; // Distance tolerance cutoff
+        let userPixelCount = 0;
+        let precisionSum = 0;
         for (let i = 0; i < S * S; i++) {
-            const u = userFloats[i] > 0.3 ? 1 : 0;
-            const r = refFloats[i] > 0.3 ? 1 : 0;
-            if (u && r) intersection++;
-            if (u || r) union++;
+            if (userFloats[i] > 0.25) {
+                userPixelCount++;
+                const d = refDist[i];
+                if (d <= 1.8) {
+                    precisionSum += 1.0;
+                } else if (d < D_MAX) {
+                    precisionSum += Math.max(0, 1.0 - (d - 1.8) / (D_MAX - 1.8));
+                }
+            }
         }
-        return union === 0 ? 0 : (intersection / union);
+        const precision = userPixelCount > 0 ? (precisionSum / userPixelCount) : 0;
+
+        // 2. Coverage (Recall): Ensures all key loops/curves of the character are drawn
+        let refPixelCount = 0;
+        let coverageSum = 0;
+        for (let i = 0; i < S * S; i++) {
+            if (refFloats[i] > 0.25) {
+                refPixelCount++;
+                const d = userDist[i];
+                if (d <= 1.8) {
+                    coverageSum += 1.0;
+                } else if (d < D_MAX) {
+                    coverageSum += Math.max(0, 1.0 - (d - 1.8) / (D_MAX - 1.8));
+                }
+            }
+        }
+        const coverage = refPixelCount > 0 ? (coverageSum / refPixelCount) : 0;
+
+        // Balanced harmonic score
+        const score = (precision * 0.55) + (coverage * 0.45);
+        return { score, precision, coverage };
     }
 
     async predict(userCanvas, targetIndex) {
@@ -542,15 +607,17 @@ class MalayalamAIEngine {
             const probs = await predTensor.data();
             predTensor.dispose();
 
-            const directSim = this.computeShapeSimilarity(prep.userFloats, targetIndex);
+            const directShape = this.computeShapeScore(prep.userFloats, targetIndex);
             const flippedFloats = this._flipHorizontal(prep.userFloats, AI_CONFIG.INPUT_SIZE);
-            const flippedSim = this.computeShapeSimilarity(flippedFloats, targetIndex);
-            const isMirrored = (flippedSim > directSim + 0.05 && flippedSim >= 0.20);
+            const flippedShape = this.computeShapeScore(flippedFloats, targetIndex);
+            const isMirrored = (flippedShape.score > directShape.score + 0.12 && flippedShape.score >= 0.65);
 
             return {
                 probabilities: Array.from(probs),
-                shapeSimilarity: directSim,
-                flippedSimilarity: flippedSim,
+                shapeScore: directShape.score,
+                precision: directShape.precision,
+                coverage: directShape.coverage,
+                flippedShapeScore: flippedShape.score,
                 isMirrored: isMirrored
             };
         } catch (err) {
@@ -573,6 +640,8 @@ class MalayalamApp {
         this.filteredList = [];
         this.currentIndex = 0;
         this.showUnderlay = false;
+        this.userUnderlayPreference = false;
+        this.underlayAutoRevealed = false;
 
         // Canvas state
         this.canvas = null;
@@ -596,6 +665,10 @@ class MalayalamApp {
     }
 
     init() {
+        this.currentLeaderboardTab = 'overall';
+        this.leaderboardSearchQuery = '';
+        this.currentAuthTab = 'login';
+
         this.canvas = document.getElementById('drawing-canvas');
         if (this.canvas) {
             this.ctx = this.canvas.getContext('2d');
@@ -605,13 +678,28 @@ class MalayalamApp {
         }
         this.filterCategory('vowels');
         this.renderLibraryGrid();
+        this.renderUserAuthState();
+        this.updateCharacterPointsDisplay();
+
+        if (window.thanimaAuth) {
+            window.thanimaAuth.onDataChange(() => {
+                this.renderLeaderboard();
+                this.renderUserAuthState();
+                this.updateCharacterPointsDisplay();
+                this.renderAdminHistory();
+                this.renderAdminRolesList();
+            });
+        }
 
         this.ai.initialize((statusText, state) => {
             this._updateAIStatusBadge(statusText, state);
         });
 
-        // Show welcome onboarding mini-game on first visit
-        if (!localStorage.getItem('thanima_onboarded')) {
+        // Login is the first popup that should be shown!
+        const currentUser = window.thanimaAuth ? window.thanimaAuth.getCurrentUser() : null;
+        if (!currentUser) {
+            setTimeout(() => this.openAuthModal('login'), 350);
+        } else if (!localStorage.getItem('thanima_onboarded')) {
             setTimeout(() => this.openOnboardingModal(), 500);
         }
     }
@@ -725,6 +813,7 @@ class MalayalamApp {
         this.canvas.addEventListener('touchstart', startDrawing, { passive: false });
         this.canvas.addEventListener('touchmove', draw, { passive: false });
         this.canvas.addEventListener('touchend', stopDrawing);
+        this.canvas.addEventListener('touchcancel', stopDrawing);
     }
 
     clearCanvas() {
@@ -736,6 +825,12 @@ class MalayalamApp {
         this.showPrompt();
         this.hideCheckResult();
         this.sound.playClear();
+
+        // Restore underlay to user's preference if it was auto-revealed on Check
+        if (this.underlayAutoRevealed) {
+            this.underlayAutoRevealed = false;
+            this._applyUnderlayState(this.userUnderlayPreference);
+        }
     }
 
     showPrompt() {
@@ -748,11 +843,17 @@ class MalayalamApp {
     }
 
     toggleUnderlay() {
-        this.showUnderlay = !this.showUnderlay;
+        this.userUnderlayPreference = !this.userUnderlayPreference;
+        this.underlayAutoRevealed = false;
+        this._applyUnderlayState(this.userUnderlayPreference);
+    }
+
+    _applyUnderlayState(show) {
+        this.showUnderlay = show;
         const el = document.getElementById('canvas-underlay');
         const btn = document.getElementById('btn-toggle-underlay');
-        if (el) el.classList.toggle('hidden', !this.showUnderlay);
-        if (btn) btn.classList.toggle('opacity-60', !this.showUnderlay);
+        if (el) el.classList.toggle('hidden', !show);
+        if (btn) btn.classList.toggle('opacity-60', !this.userUnderlayPreference);
     }
 
     playAudio() {
@@ -823,6 +924,7 @@ class MalayalamApp {
             badge.textContent = typeLabel[letter.type] || letter.type;
             badge.className = `px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider mb-2 ${badgeColor[letter.type] || ''}`;
         }
+        this.updateCharacterPointsDisplay();
     }
 
     _setText(id, text) {
@@ -845,7 +947,7 @@ class MalayalamApp {
     }
 
     navigateTo(view) {
-        ['practice', 'library'].forEach(v => {
+        ['practice', 'library', 'leaderboard'].forEach(v => {
             const section = document.getElementById(`view-${v}`);
             const tab = document.getElementById(`tab-${v}`);
             const active = v === view;
@@ -856,6 +958,10 @@ class MalayalamApp {
                     : 'py-3 px-5 border-b-4 border-transparent text-tab-inactive font-extrabold flex items-center space-x-2 transition';
             }
         });
+
+        if (view === 'leaderboard') {
+            this.renderLeaderboard();
+        }
     }
 
     toggleTheme() {
@@ -1056,6 +1162,12 @@ class MalayalamApp {
             return;
         }
 
+        // Auto-reveal underlay during checking so students can see how their strokes compare!
+        if (!this.userUnderlayPreference) {
+            this.underlayAutoRevealed = true;
+            this._applyUnderlayState(true);
+        }
+
         // 1. Extreme Scribble Guard (only flag absurdly dense scribbles/scratches)
         const isScribble = this.strokeSegmentsCount > 25 || this.totalStrokeLength > 6000;
 
@@ -1077,8 +1189,10 @@ class MalayalamApp {
         }
 
         const probabilities = evalResult.probabilities;
-        const shapeSimilarity = evalResult.shapeSimilarity;
         const targetProb = probabilities[targetGlobalIndex] || 0;
+        const shapeScore = evalResult.shapeScore;
+        const precision = evalResult.precision;
+        const coverage = evalResult.coverage;
 
         const ranked = probabilities.map((p, idx) => ({
             prob: p,
@@ -1091,48 +1205,68 @@ class MalayalamApp {
         const top2 = ranked[1];
         const top3 = ranked[2];
 
-        console.log(`[Hybrid Eval] Target: "${letter.char}" (${letter.roman}) | CNN Prob: ${(targetProb * 100).toFixed(1)}% | Shape Sim: ${(shapeSimilarity * 100).toFixed(1)}%`);
-
-        const combinedScore = (targetProb * 0.70) + (shapeSimilarity * 0.30);
+        console.log(`[Hybrid Eval] Target: "${letter.char}" (${letter.roman}) | CNN Prob: ${(targetProb * 100).toFixed(1)}% | Shape: ${(shapeScore * 100).toFixed(1)}% (Prec: ${(precision * 100).toFixed(1)}%, Cov: ${(coverage * 100).toFixed(1)}%)`);
 
         // ── DECISION LOGIC ────────────────────────────────────────
 
         // Case 0: Mirror / Reversed Drawing Detection
         if (evalResult.isMirrored) {
             this.sound.playWrong();
-            this._showCheckResult('wrong', `❌ Mirrored / Reversed! You drew "${letter.char}" (${letter.roman}) backwards. Turn on Underlay to see the correct direction!`);
+            this._showCheckResult('wrong', `❌ Mirrored / Reversed! You drew "${letter.char}" (${letter.roman}) backwards. Look at the underlay to see the correct direction!`);
             return;
         }
 
-        // Case 1: Target character is Correct (Top-1 OR strong structural + CNN consensus)
-        const isTargetTop1 = (top1.idx === targetGlobalIndex && targetProb >= 0.08 && shapeSimilarity >= 0.12);
-        const isStrongConsensus = (shapeSimilarity >= 0.22 && targetProb >= 0.05);
+        // Realistic match percentage calculation
+        const rawMatchPct = Math.round((shapeScore * 0.60 + Math.min(1.0, targetProb / 0.50) * 0.40) * 100);
+        let matchPct = rawMatchPct;
+        if (matchPct >= 96) {
+            matchPct = 100;
+        }
 
-        if (isTargetTop1 || isStrongConsensus) {
+        // Case 1: Target character is genuinely Correct (Top-1 consensus + high shape precision & coverage)
+        const isTargetTop1 = (top1.idx === targetGlobalIndex && targetProb >= 0.20 && shapeScore >= 0.72 && precision >= 0.68);
+        const isExceptionalShape = (shapeScore >= 0.85 && precision >= 0.80);
+
+        if (isTargetTop1 || isExceptionalShape) {
             this.sound.playCorrect();
-            let matchPct = Math.min(100, Math.round(78 + Math.min(1.0, combinedScore / 0.25) * 22));
-            if (matchPct >= 96) {
-                matchPct = 100;
+
+            // Award practice points via ThanimaAuthStore!
+            let pointsMsg = '';
+            if (window.thanimaAuth) {
+                const currentUser = window.thanimaAuth.getCurrentUser();
+                if (currentUser && currentUser.role !== 'admin') {
+                    const result = await window.thanimaAuth.awardPracticePoints(letter.id, matchPct);
+                    this.updateCharacterPointsDisplay();
+                    this.renderUserAuthState();
+                    if (result.pointsEarned > 0) {
+                        this.showPointsToast(`+${result.pointsEarned} Pts! (${result.charTotal}/${result.maxCharPoints} for "${letter.char}")`);
+                        pointsMsg = ` (+${result.pointsEarned} pts)`;
+                    } else if (result.isMaxReached) {
+                        pointsMsg = ` (Max 20 pts reached)`;
+                    }
+                } else if (!currentUser) {
+                    pointsMsg = ` (Log in to earn practice points!)`;
+                }
             }
-            this._showCheckResult('correct', `✅ Correct! Great job writing ${letter.char}! (${matchPct}% match)`);
+
+            this._showCheckResult('correct', `✅ Correct! Great job writing ${letter.char}! (${matchPct}% match)${pointsMsg}`);
             return;
         }
 
-        // Case 2: Near Match / Good Attempt
-        const isNear = (top2 && top2.idx === targetGlobalIndex && targetProb >= 0.05) ||
-                       (top3 && top3.idx === targetGlobalIndex && targetProb >= 0.04) ||
-                       (shapeSimilarity >= 0.16);
+        // Case 2: Near Match / Good Attempt (Slightly wrong shape or deformed loops)
+        const isNear = (top1.idx === targetGlobalIndex && shapeScore >= 0.45) ||
+                       (top2 && top2.idx === targetGlobalIndex && shapeScore >= 0.45) ||
+                       (shapeScore >= 0.50);
 
         if (isNear) {
             this.sound.playWrong();
-            const matchPct = Math.round(50 + Math.min(1.0, combinedScore / 0.15) * 20);
-            this._showCheckResult('almost', `⚠️ Almost there! Keep practising "${letter.char}" (${letter.roman}) (${matchPct}% match)`);
+            this._showCheckResult('almost', `⚠️ Almost there! Your strokes are slightly off (${matchPct}% match). Look at the underlay to see how to shape "${letter.char}" (${letter.roman})!`);
             return;
         }
 
         // Case 3: Incorrect / Does not match
         this.sound.playWrong();
-        this._showCheckResult('wrong', `❌ Incorrect! Please trace "${letter.char}" ("${letter.roman}") carefully. Turn on Underlay for help!`);
+        this._showCheckResult('wrong', `❌ Incorrect! Please trace "${letter.char}" ("${letter.roman}") carefully. Look at the underlay guide!`);
     }
 
     _showCheckResult(type, message) {
@@ -1147,6 +1281,613 @@ class MalayalamApp {
     hideCheckResult() {
         const el = document.getElementById('check-result');
         if (el) el.style.display = 'none';
+    }
+
+    // ============================================================
+    //  AUTHENTICATION & POINTS UI BINDINGS
+    // ============================================================
+    updateCharacterPointsDisplay() {
+        const letter = this.filteredList[this.currentIndex];
+        const textEl = document.getElementById('card-points-text');
+        const badge = document.getElementById('card-points-badge');
+        if (!textEl || !letter) return;
+
+        if (!window.thanimaAuth) {
+            textEl.textContent = '0 / 20 pts';
+            return;
+        }
+
+        const user = window.thanimaAuth.getCurrentUser();
+        if (!user || user.role === 'admin') {
+            textEl.textContent = '0 / 20 pts';
+            if (badge) badge.title = 'Log in with your Reg No to earn practice points for this character';
+            return;
+        }
+
+        const pts = window.thanimaAuth.getCharacterPoints(letter.id);
+        textEl.textContent = `${pts} / 20 pts`;
+        if (badge) badge.title = `${pts} of 20 points earned for "${letter.char}"`;
+    }
+
+    renderUserAuthState() {
+        const container = document.getElementById('header-auth-container');
+        const lbAdminBtn = document.getElementById('btn-leaderboard-admin');
+
+        if (!window.thanimaAuth) {
+            if (container) {
+                container.innerHTML = `
+                    <button onclick="app.openAuthModal('login')"
+                        class="px-3 py-1.5 rounded-xl bg-accent text-on-accent font-black text-xs shadow-sm hover:opacity-95 transition flex items-center space-x-1.5 active:scale-95">
+                        <i class="fa-solid fa-right-to-bracket"></i>
+                        <span>Login</span>
+                    </button>
+                `;
+            }
+            if (lbAdminBtn) {
+                lbAdminBtn.classList.add('hidden');
+                lbAdminBtn.classList.remove('flex');
+            }
+            return;
+        }
+
+        const user = window.thanimaAuth.getCurrentUser();
+
+        // Control Leaderboard Admin Points Entry button visibility
+        if (lbAdminBtn) {
+            const isAdmin = user && user.role === 'admin';
+            lbAdminBtn.classList.toggle('hidden', !isAdmin);
+            lbAdminBtn.classList.toggle('flex', isAdmin);
+        }
+
+        if (!container) return;
+
+        if (!user) {
+            container.innerHTML = `
+                <button onclick="app.openAuthModal('login')"
+                    class="px-3 py-1.5 rounded-xl bg-accent text-on-accent font-black text-xs shadow-sm hover:opacity-95 transition flex items-center space-x-1.5 active:scale-95">
+                    <i class="fa-solid fa-right-to-bracket"></i>
+                    <span>Login</span>
+                </button>
+            `;
+            return;
+        }
+
+        if (user.role === 'admin') {
+            container.innerHTML = `
+                <div class="flex items-center space-x-2">
+                    <button onclick="app.openAdminModal()"
+                        class="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-black text-xs shadow-sm transition flex items-center space-x-1.5 active:scale-95"
+                        title="Award offline points and manage admins">
+                        <i class="fa-solid fa-shield-halved"></i>
+                        <span class="hidden sm:inline">Admin Portal</span>
+                    </button>
+                    <span class="px-2.5 py-1 rounded-xl bg-surface-soft border border-slate-200 dark:border-slate-700 text-xs font-black text-heading hidden md:inline">
+                        Admin
+                    </span>
+                    <button onclick="app.logout()"
+                        class="p-1.5 text-muted hover:text-red-500 transition rounded-lg"
+                        title="Logout">
+                        <i class="fa-solid fa-arrow-right-from-bracket"></i>
+                    </button>
+                </div>
+            `;
+        } else {
+            const total = (user.onlinePoints || 0) + (user.offlinePoints || 0);
+            container.innerHTML = `
+                <div class="flex items-center space-x-2">
+                    <div class="px-3 py-1.5 rounded-xl bg-surface-soft border border-slate-200 dark:border-slate-700 flex items-center space-x-2 text-xs font-bold">
+                        <span class="font-extrabold text-heading truncate max-w-[90px] sm:max-w-[130px]">${user.name.split(' ')[0]}</span>
+                        <span class="inline-flex items-center space-x-1 px-2 py-0.5 rounded-lg bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 font-black">
+                            <i class="fa-solid fa-star text-[10px] text-amber-500"></i>
+                            <span>${total} pts</span>
+                        </span>
+                    </div>
+                    <button onclick="app.logout()"
+                        class="p-1.5 text-muted hover:text-red-500 transition rounded-lg"
+                        title="Logout">
+                        <i class="fa-solid fa-arrow-right-from-bracket"></i>
+                    </button>
+                </div>
+            `;
+        }
+    }
+
+    showPointsToast(message) {
+        const existing = document.querySelector('.points-toast');
+        if (existing) existing.remove();
+
+        const toast = document.createElement('div');
+        toast.className = 'points-toast';
+        toast.innerHTML = `<i class="fa-solid fa-award text-amber-300 text-lg"></i><span>${message}</span>`;
+        document.body.appendChild(toast);
+
+        setTimeout(() => {
+            toast.style.opacity = '0';
+            toast.style.transform = 'translateY(-20px) scale(0.9)';
+            setTimeout(() => toast.remove(), 350);
+        }, 3000);
+    }
+
+    openAuthModal(tab = 'login') {
+        const modal = document.getElementById('auth-modal');
+        if (!modal) return;
+        this.setAuthTab(tab);
+        const errEl = document.getElementById('auth-error-msg');
+        if (errEl) errEl.classList.add('hidden');
+        modal.classList.remove('hidden');
+    }
+
+    closeAuthModal() {
+        const modal = document.getElementById('auth-modal');
+        if (modal) modal.classList.add('hidden');
+    }
+
+    setAuthTab(tab) {
+        this.currentAuthTab = tab;
+        const btnLogin = document.getElementById('auth-tab-btn-login');
+        const btnRegister = document.getElementById('auth-tab-btn-register');
+        const nameGroup = document.getElementById('auth-group-name');
+        const submitBtn = document.getElementById('auth-submit-btn');
+        const titleEl = document.getElementById('auth-modal-title');
+        const switchText = document.getElementById('auth-switch-text');
+        const switchLink = document.getElementById('auth-switch-link');
+        const errEl = document.getElementById('auth-error-msg');
+        if (errEl) errEl.classList.add('hidden');
+
+        if (tab === 'login') {
+            if (btnLogin) btnLogin.className = 'w-1/2 py-2 rounded-xl text-xs font-black transition bg-surface text-heading shadow-sm';
+            if (btnRegister) btnRegister.className = 'w-1/2 py-2 rounded-xl text-xs font-black transition text-muted';
+            if (nameGroup) nameGroup.classList.add('hidden');
+            if (titleEl) titleEl.textContent = 'Student Login';
+            if (submitBtn) submitBtn.innerHTML = '<span>Log In to Account</span><i class="fa-solid fa-arrow-right text-[11px]"></i>';
+            if (switchText) switchText.textContent = 'New participant?';
+            if (switchLink) switchLink.textContent = 'Create Account';
+        } else {
+            if (btnLogin) btnLogin.className = 'w-1/2 py-2 rounded-xl text-xs font-black transition text-muted';
+            if (btnRegister) btnRegister.className = 'w-1/2 py-2 rounded-xl text-xs font-black transition bg-surface text-heading shadow-sm';
+            if (nameGroup) nameGroup.classList.remove('hidden');
+            if (titleEl) titleEl.textContent = 'Create Student Account';
+            if (submitBtn) submitBtn.innerHTML = '<span>Register & Start Learning</span><i class="fa-solid fa-arrow-right text-[11px]"></i>';
+            if (switchText) switchText.textContent = 'Already have an account?';
+            if (switchLink) switchLink.textContent = 'Log In';
+        }
+    }
+
+    toggleAuthTab() {
+        this.setAuthTab(this.currentAuthTab === 'login' ? 'register' : 'login');
+    }
+
+    async handleAuthSubmit(e) {
+        e.preventDefault();
+        const errEl = document.getElementById('auth-error-msg');
+        const regNo = (document.getElementById('auth-input-regno')?.value || '').trim();
+        const password = (document.getElementById('auth-input-password')?.value || '').trim();
+        const name = (document.getElementById('auth-input-name')?.value || '').trim();
+
+        if (!window.thanimaAuth) return;
+
+        let result;
+        if (this.currentAuthTab === 'register') {
+            result = await window.thanimaAuth.register(name, regNo, password);
+        } else {
+            result = await window.thanimaAuth.login(regNo, password);
+        }
+
+        if (!result.success) {
+            if (errEl) {
+                errEl.textContent = result.error || 'Authentication failed.';
+                errEl.classList.remove('hidden');
+            }
+            return;
+        }
+
+        // Success!
+        this.closeAuthModal();
+        this.renderUserAuthState();
+        this.updateCharacterPointsDisplay();
+        this.renderLeaderboard();
+        this.showPointsToast(`Welcome, ${result.user.name}!`);
+    }
+
+    logout() {
+        if (window.thanimaAuth) {
+            window.thanimaAuth.logout();
+        }
+        this.renderUserAuthState();
+        this.updateCharacterPointsDisplay();
+        this.renderLeaderboard();
+        this.showPointsToast('Logged out successfully.');
+    }
+
+    // ============================================================
+    //  LEADERBOARD UI LOGIC
+    // ============================================================
+    switchLeaderboardTab(tab) {
+        this.currentLeaderboardTab = tab;
+        const tabs = ['overall', 'online', 'offline'];
+        tabs.forEach(t => {
+            const btn = document.getElementById(`lb-tab-${t}`);
+            if (btn) {
+                if (t === tab) {
+                    btn.className = 'px-4 py-2.5 rounded-xl font-black text-xs sm:text-sm transition flex items-center space-x-2 bg-accent text-on-accent shadow';
+                } else {
+                    btn.className = 'px-4 py-2.5 rounded-xl font-black text-xs sm:text-sm transition flex items-center space-x-2 bg-filter-inactive text-filter-inactive';
+                }
+            }
+        });
+
+        const desc = document.getElementById('leaderboard-tab-description');
+        if (desc) {
+            if (tab === 'overall') {
+                desc.textContent = 'Combined Total Points (Online Practice + Offline Classes)';
+            } else if (tab === 'online') {
+                desc.textContent = 'Points Earned Tracing Malayalam Characters (Max 20 pts per character)';
+            } else {
+                desc.textContent = 'Points Awarded by Admins for Offline Classes, Quizzes & Workshops';
+            }
+        }
+
+        this.renderLeaderboard();
+    }
+
+    filterLeaderboard(query) {
+        this.leaderboardSearchQuery = query;
+        this.renderLeaderboard();
+    }
+
+    renderLeaderboard() {
+        if (!window.thanimaAuth) return;
+        const currentUser = window.thanimaAuth.getCurrentUser();
+        const tab = this.currentLeaderboardTab || 'overall';
+        const query = this.leaderboardSearchQuery || '';
+
+        let data = [];
+        if (tab === 'overall') {
+            data = window.thanimaAuth.getOverallLeaderboard(query);
+        } else if (tab === 'online') {
+            data = window.thanimaAuth.getOnlineLeaderboard(query);
+        } else {
+            data = window.thanimaAuth.getOfflineLeaderboard(query);
+        }
+
+        const thead = document.getElementById('leaderboard-table-head');
+        const tbody = document.getElementById('leaderboard-table-body');
+        const emptyEl = document.getElementById('leaderboard-empty');
+
+        if (!thead || !tbody) return;
+
+        // Render Head
+        if (tab === 'overall') {
+            thead.innerHTML = `
+                <th class="py-2.5 sm:py-3 px-2.5 sm:px-4">Rank</th>
+                <th class="py-2.5 sm:py-3 px-2.5 sm:px-4">Participant</th>
+                <th class="py-2.5 sm:py-3 px-2.5 sm:px-4 hidden sm:table-cell">Reg No</th>
+                <th class="py-2.5 sm:py-3 px-2 sm:px-4 text-center">Online</th>
+                <th class="py-2.5 sm:py-3 px-2 sm:px-4 text-center">Offline</th>
+                <th class="py-2.5 sm:py-3 px-2.5 sm:px-4 text-right">Total</th>
+            `;
+        } else if (tab === 'online') {
+            thead.innerHTML = `
+                <th class="py-2.5 sm:py-3 px-2.5 sm:px-4">Rank</th>
+                <th class="py-2.5 sm:py-3 px-2.5 sm:px-4">Participant</th>
+                <th class="py-2.5 sm:py-3 px-2.5 sm:px-4 hidden sm:table-cell">Reg No</th>
+                <th class="py-2.5 sm:py-3 px-2 sm:px-4 text-center">Mastered</th>
+                <th class="py-2.5 sm:py-3 px-2.5 sm:px-4 text-right">Points</th>
+            `;
+        } else {
+            thead.innerHTML = `
+                <th class="py-2.5 sm:py-3 px-2.5 sm:px-4">Rank</th>
+                <th class="py-2.5 sm:py-3 px-2.5 sm:px-4">Participant</th>
+                <th class="py-2.5 sm:py-3 px-2.5 sm:px-4 hidden sm:table-cell">Reg No</th>
+                <th class="py-2.5 sm:py-3 px-2 sm:px-4 text-center">Events</th>
+                <th class="py-2.5 sm:py-3 px-2.5 sm:px-4 text-right">Points</th>
+            `;
+        }
+
+        tbody.innerHTML = '';
+        if (data.length === 0) {
+            if (emptyEl) emptyEl.classList.remove('hidden');
+            return;
+        } else {
+            if (emptyEl) emptyEl.classList.add('hidden');
+        }
+
+        data.forEach((row, idx) => {
+            const rank = idx + 1;
+            let rankBadge = `<span class="font-extrabold text-muted">#${rank}</span>`;
+            if (rank === 1) rankBadge = `<span class="w-6 h-6 rounded-full inline-flex items-center justify-center font-black text-xs rank-badge-1 shadow-sm">🥇</span>`;
+            else if (rank === 2) rankBadge = `<span class="w-6 h-6 rounded-full inline-flex items-center justify-center font-black text-xs rank-badge-2 shadow-sm">🥈</span>`;
+            else if (rank === 3) rankBadge = `<span class="w-6 h-6 rounded-full inline-flex items-center justify-center font-black text-xs rank-badge-3 shadow-sm">🥉</span>`;
+
+            const isMe = currentUser && currentUser.regNo.toUpperCase() === row.regNo.toUpperCase();
+            const tr = document.createElement('tr');
+            tr.className = `hover:bg-surface-soft transition ${isMe ? 'leaderboard-row-me font-black' : ''}`;
+
+            if (tab === 'overall') {
+                tr.innerHTML = `
+                    <td class="py-2.5 sm:py-3.5 px-2.5 sm:px-4">${rankBadge}</td>
+                    <td class="py-2.5 sm:py-3.5 px-2.5 sm:px-4">
+                        <div class="font-bold text-heading flex items-center space-x-1 sm:space-x-1.5 text-xs sm:text-sm">
+                            <span>${row.name}</span>
+                            ${isMe ? '<span class="text-[9px] uppercase tracking-wider bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 px-1 py-0.5 rounded font-black">You</span>' : ''}
+                        </div>
+                        <div class="font-mono text-muted text-[10px] sm:hidden">${row.regNo}</div>
+                    </td>
+                    <td class="py-2.5 sm:py-3.5 px-2.5 sm:px-4 font-mono text-muted text-xs font-bold hidden sm:table-cell">${row.regNo}</td>
+                    <td class="py-2.5 sm:py-3.5 px-2 sm:px-4 text-center font-semibold text-emerald-600 dark:text-emerald-400 text-xs sm:text-sm">${row.onlinePoints}</td>
+                    <td class="py-2.5 sm:py-3.5 px-2 sm:px-4 text-center font-semibold text-blue-600 dark:text-blue-400 text-xs sm:text-sm">${row.offlinePoints}</td>
+                    <td class="py-2.5 sm:py-3.5 px-2.5 sm:px-4 text-right">
+                        <span class="inline-flex items-center space-x-1 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-xl bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800 font-black text-amber-700 dark:text-amber-300 text-xs sm:text-sm whitespace-nowrap">
+                            <i class="fa-solid fa-crown text-[10px] text-amber-500"></i>
+                            <span>${row.totalPoints} pts</span>
+                        </span>
+                    </td>
+                `;
+            } else if (tab === 'online') {
+                tr.innerHTML = `
+                    <td class="py-2.5 sm:py-3.5 px-2.5 sm:px-4">${rankBadge}</td>
+                    <td class="py-2.5 sm:py-3.5 px-2.5 sm:px-4">
+                        <div class="font-bold text-heading flex items-center space-x-1 sm:space-x-1.5 text-xs sm:text-sm">
+                            <span>${row.name}</span>
+                            ${isMe ? '<span class="text-[9px] uppercase tracking-wider bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 px-1 py-0.5 rounded font-black">You</span>' : ''}
+                        </div>
+                        <div class="font-mono text-muted text-[10px] sm:hidden">${row.regNo}</div>
+                    </td>
+                    <td class="py-2.5 sm:py-3.5 px-2.5 sm:px-4 font-mono text-muted text-xs font-bold hidden sm:table-cell">${row.regNo}</td>
+                    <td class="py-2.5 sm:py-3.5 px-2 sm:px-4 text-center font-semibold text-muted text-xs sm:text-sm">${row.charactersCount} letters</td>
+                    <td class="py-2.5 sm:py-3.5 px-2.5 sm:px-4 text-right">
+                        <span class="inline-flex items-center space-x-1 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 font-black text-emerald-700 dark:text-emerald-300 text-xs sm:text-sm whitespace-nowrap">
+                            <i class="fa-solid fa-star text-[10px] text-emerald-500"></i>
+                            <span>${row.points} pts</span>
+                        </span>
+                    </td>
+                `;
+            } else {
+                tr.innerHTML = `
+                    <td class="py-2.5 sm:py-3.5 px-2.5 sm:px-4">${rankBadge}</td>
+                    <td class="py-2.5 sm:py-3.5 px-2.5 sm:px-4">
+                        <div class="font-bold text-heading flex items-center space-x-1 sm:space-x-1.5 text-xs sm:text-sm">
+                            <span>${row.name}</span>
+                            ${isMe ? '<span class="text-[9px] uppercase tracking-wider bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 px-1 py-0.5 rounded font-black">You</span>' : ''}
+                        </div>
+                        <div class="font-mono text-muted text-[10px] sm:hidden">${row.regNo}</div>
+                    </td>
+                    <td class="py-2.5 sm:py-3.5 px-2.5 sm:px-4 font-mono text-muted text-xs font-bold hidden sm:table-cell">${row.regNo}</td>
+                    <td class="py-2.5 sm:py-3.5 px-2 sm:px-4 text-center font-semibold text-muted text-xs sm:text-sm">${row.eventsCount} events</td>
+                    <td class="py-2.5 sm:py-3.5 px-2.5 sm:px-4 text-right">
+                        <span class="inline-flex items-center space-x-1 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-xl bg-blue-50 dark:bg-blue-950/50 border border-blue-200 dark:border-blue-800 font-black text-blue-700 dark:text-blue-300 text-xs sm:text-sm whitespace-nowrap">
+                            <i class="fa-solid fa-chalkboard-user text-[10px] text-blue-500"></i>
+                            <span>${row.points} pts</span>
+                        </span>
+                    </td>
+                `;
+            }
+            tbody.appendChild(tr);
+        });
+    }
+
+    // ============================================================
+    //  ADMIN OFFLINE POINTS PORTAL
+    // ============================================================
+    openAdminModal() {
+        if (!window.thanimaAuth) return;
+        const currentUser = window.thanimaAuth.getCurrentUser();
+        if (!currentUser || currentUser.role !== 'admin') {
+            this.openAuthModal('login');
+            const errEl = document.getElementById('auth-error-msg');
+            if (errEl) {
+                errEl.textContent = 'Admin authorization required. Please sign in with an authorized account.';
+                errEl.classList.remove('hidden');
+            }
+            return;
+        }
+
+        const modal = document.getElementById('admin-modal');
+        if (modal) {
+            modal.classList.remove('hidden');
+            const fb = document.getElementById('admin-feedback-msg');
+            if (fb) fb.classList.add('hidden');
+            this.renderAdminHistory();
+            this.renderAdminRolesList();
+        }
+    }
+
+    closeAdminModal() {
+        const modal = document.getElementById('admin-modal');
+        if (modal) modal.classList.add('hidden');
+    }
+
+    onAdminRegNoInput(val) {
+        const regNo = (val || '').trim().toUpperCase();
+        const statusEl = document.getElementById('admin-regno-status');
+        const nameInput = document.getElementById('admin-input-name');
+        if (!window.thanimaAuth) return;
+
+        if (!window.thanimaAuth.validateRegNo(regNo)) {
+            if (statusEl) {
+                statusEl.textContent = 'Format: XXYYYZZZZ';
+                statusEl.className = 'text-[10px] font-bold text-amber-500';
+            }
+            return;
+        }
+
+        const users = window.thanimaAuth._getUsers();
+        const user = users.find(u => u.regNo.toUpperCase() === regNo);
+        if (user) {
+            if (nameInput) nameInput.value = user.name;
+            if (statusEl) {
+                statusEl.textContent = '✓ Registered Student';
+                statusEl.className = 'text-[10px] font-bold text-emerald-500';
+            }
+        } else {
+            if (statusEl) {
+                statusEl.textContent = 'New Participant (will create)';
+                statusEl.className = 'text-[10px] font-bold text-blue-500';
+            }
+        }
+    }
+
+    setAdminPointsQuick(pts) {
+        const input = document.getElementById('admin-input-points');
+        if (input) input.value = pts;
+    }
+
+    async handleAdminPointsSubmit(e) {
+        e.preventDefault();
+        const regNo = (document.getElementById('admin-input-regno')?.value || '').trim();
+        const name = (document.getElementById('admin-input-name')?.value || '').trim();
+        const points = document.getElementById('admin-input-points')?.value || 10;
+        const remark = (document.getElementById('admin-input-remark')?.value || '').trim();
+        const fb = document.getElementById('admin-feedback-msg');
+
+        if (!window.thanimaAuth) return;
+
+        const res = await window.thanimaAuth.addOfflinePoints(regNo, points, remark, name);
+        if (!res.success) {
+            if (fb) {
+                fb.textContent = res.error || 'Failed to award points.';
+                fb.className = 'my-3 p-3 rounded-xl text-xs font-bold text-center bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300';
+                fb.classList.remove('hidden');
+            }
+            return;
+        }
+
+        if (fb) {
+            fb.textContent = `✓ Successfully awarded +${points} offline points to ${res.user.name} (${res.user.regNo})!`;
+            fb.className = 'my-3 p-3 rounded-xl text-xs font-bold text-center bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300';
+            fb.classList.remove('hidden');
+        }
+
+        // Clear input form
+        document.getElementById('admin-input-regno').value = '';
+        document.getElementById('admin-input-name').value = '';
+        document.getElementById('admin-input-remark').value = '';
+        document.getElementById('admin-regno-status').textContent = 'Enter Reg No';
+        document.getElementById('admin-regno-status').className = 'text-[10px] font-bold text-muted';
+
+        this.renderAdminHistory();
+        this.renderLeaderboard();
+        this.showPointsToast(`+${points} points awarded to ${res.user.name}!`);
+    }
+
+    async addAdminByRegNo() {
+        const input = document.getElementById('admin-promote-regno');
+        const msgEl = document.getElementById('admin-promote-msg');
+        if (!input || !msgEl || !window.thanimaAuth) return;
+
+        const regNo = (input.value || '').trim().toUpperCase();
+        if (!regNo) {
+            msgEl.textContent = 'Please enter a student Registration Number.';
+            msgEl.className = 'text-[11px] font-bold p-2 rounded-xl text-center bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300';
+            msgEl.classList.remove('hidden');
+            return;
+        }
+
+        const res = await window.thanimaAuth.addAdminByRegNo(regNo);
+        if (!res.success) {
+            msgEl.textContent = res.error || 'Failed to update user role.';
+            msgEl.className = 'text-[11px] font-bold p-2 rounded-xl text-center bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300';
+            msgEl.classList.remove('hidden');
+            return;
+        }
+
+        msgEl.textContent = `✓ Granted Admin coordinator role to ${res.user.name} (${res.user.regNo})!`;
+        msgEl.className = 'text-[11px] font-bold p-2 rounded-xl text-center bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300';
+        msgEl.classList.remove('hidden');
+        input.value = '';
+        this.renderAdminRolesList();
+        this.renderLeaderboard();
+        this.showPointsToast(`${res.user.name} is now an Admin!`);
+    }
+
+    promoteStudentToAdmin() {
+        this.addAdminByRegNo();
+    }
+
+    async removeAdminByRegNo(regNo) {
+        if (!window.thanimaAuth || !regNo) return;
+        const msgEl = document.getElementById('admin-promote-msg');
+
+        const res = await window.thanimaAuth.removeAdminByRegNo(regNo);
+        if (!res.success) {
+            if (msgEl) {
+                msgEl.textContent = res.error || 'Failed to revoke admin role.';
+                msgEl.className = 'text-[11px] font-bold p-2 rounded-xl text-center bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300';
+                msgEl.classList.remove('hidden');
+            }
+            return;
+        }
+
+        if (msgEl) {
+            msgEl.textContent = `✓ Revoked admin access for ${res.user.name} (${res.user.regNo}).`;
+            msgEl.className = 'text-[11px] font-bold p-2 rounded-xl text-center bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300';
+            msgEl.classList.remove('hidden');
+        }
+
+        this.renderAdminRolesList();
+        this.renderLeaderboard();
+        this.showPointsToast(`Admin role removed for ${res.user.name}.`);
+    }
+
+    renderAdminRolesList() {
+        const container = document.getElementById('admin-current-list');
+        if (!container || !window.thanimaAuth) return;
+
+        const admins = window.thanimaAuth.getAdminsList();
+        if (admins.length === 0) {
+            container.innerHTML = '<div class="text-muted italic py-1 text-center">No admins registered.</div>';
+            return;
+        }
+
+        container.innerHTML = admins.map(a => `
+            <div class="flex items-center justify-between p-2 rounded-xl bg-surface border border-slate-200 dark:border-slate-700/60">
+                <div class="flex items-center space-x-2">
+                    <span class="w-6 h-6 rounded-full bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 flex items-center justify-center text-[10px] font-black">
+                        <i class="fa-solid fa-shield-halved"></i>
+                    </span>
+                    <div>
+                        <div class="font-extrabold text-heading text-xs">${a.name}</div>
+                        <div class="font-mono text-muted text-[10px]">${a.regNo}</div>
+                    </div>
+                </div>
+                <div>
+                    ${a.isMaster ? `
+                        <span class="px-2 py-0.5 rounded-lg bg-purple-100 text-purple-800 dark:bg-purple-950 dark:text-purple-300 text-[10px] font-black">
+                            Master
+                        </span>
+                    ` : `
+                        <button type="button" onclick="app.removeAdminByRegNo('${a.regNo}')"
+                            class="px-2 py-1 rounded-lg bg-red-50 hover:bg-red-100 dark:bg-red-950/40 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-800 text-[10px] font-extrabold transition active:scale-95">
+                            <i class="fa-solid fa-trash-can mr-1"></i> Remove
+                        </button>
+                    `}
+                </div>
+            </div>
+        `).join('');
+    }
+
+    renderAdminHistory() {
+        const container = document.getElementById('admin-history-list');
+        if (!container || !window.thanimaAuth) return;
+
+        const logs = window.thanimaAuth.getOfflineLogs();
+        if (logs.length === 0) {
+            container.innerHTML = '<div class="text-muted italic py-1">No offline awards recorded yet.</div>';
+            return;
+        }
+
+        container.innerHTML = logs.map(l => `
+            <div class="flex items-center justify-between p-2 rounded-xl bg-surface-soft border border-slate-200 dark:border-slate-700/60">
+                <div>
+                    <span class="font-extrabold text-heading">${l.name}</span>
+                    <span class="font-mono text-muted text-[10px] ml-1">(${l.regNo})</span>
+                    <div class="text-[10px] text-muted">${l.remark} • <span class="opacity-75">${l.date}</span></div>
+                </div>
+                <span class="font-black text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-lg border border-emerald-200 dark:border-emerald-800">
+                    +${l.points} pts
+                </span>
+            </div>
+        `).join('');
     }
 }
 
