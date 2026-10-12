@@ -20,6 +20,7 @@ class ThanimaAuthStore {
         this.isCloudEnabled = false;
         this.db = null;
         this.onDataChangeCallback = null;
+        this.onAccountDeletedCallback = null;
 
         this.init();
     }
@@ -65,9 +66,15 @@ class ThanimaAuthStore {
                 this.isCloudEnabled = true;
                 console.log('🔥 Firebase Cloud Firestore connected! Real-time syncing active.');
 
-                // Sync current local users up to cloud if cloud is newly initialized
-                const localUsers = this._getUsers();
-                localUsers.forEach(u => this._syncUserToCloud(u));
+                // Ensure master admin doc exists in cloud without re-uploading all deleted local users
+                const master = this._getUsers().find(u => u.regNo.toUpperCase() === this.MASTER_ADMIN_ID);
+                if (master) {
+                    this.db.collection('users').doc(this.MASTER_ADMIN_ID).get().then(doc => {
+                        if (!doc.exists) {
+                            this._syncUserToCloud(master);
+                        }
+                    }).catch(() => {});
+                }
 
                 // Listen for real-time changes to Users
                 this.db.collection('users').onSnapshot(snapshot => {
@@ -75,17 +82,37 @@ class ThanimaAuthStore {
                     snapshot.forEach(doc => {
                         cloudUsers.push(doc.data());
                     });
-                    if (cloudUsers.length > 0) {
-                        this._saveUsers(cloudUsers);
-                        // Refresh session user if modified
-                        const currentSession = this.getCurrentUser();
-                        if (currentSession) {
-                            const updatedMe = cloudUsers.find(u => u.regNo.toUpperCase() === currentSession.regNo.toUpperCase());
-                            if (updatedMe) this._setCurrentUser(updatedMe);
+
+                    // Retain master admin locally even if cloud only has student docs
+                    const currentMaster = this._getUsers().find(u => u.regNo.toUpperCase() === this.MASTER_ADMIN_ID);
+                    if (currentMaster && !cloudUsers.some(u => u.regNo.toUpperCase() === this.MASTER_ADMIN_ID)) {
+                        cloudUsers.push(currentMaster);
+                    }
+
+                    // Firestore is the single source of truth for the user pool
+                    this._saveUsers(cloudUsers);
+
+                    // Check active logged-in session
+                    const currentSession = this.getCurrentUser();
+                    if (currentSession) {
+                        const isMaster = currentSession.regNo.toUpperCase() === this.MASTER_ADMIN_ID;
+                        const updatedMe = cloudUsers.find(u => u.regNo.toUpperCase() === currentSession.regNo.toUpperCase());
+
+                        if (updatedMe) {
+                            // Update live user session with latest points and stats from cloud
+                            this._setCurrentUser(updatedMe);
+                        } else if (!isMaster) {
+                            // Account was DELETED from Firebase Firestore!
+                            console.warn(`User ${currentSession.regNo} was deleted from database.`);
+                            this._setCurrentUser(null);
+                            if (this.onAccountDeletedCallback) {
+                                this.onAccountDeletedCallback(currentSession.regNo);
+                            }
                         }
-                        if (this.onDataChangeCallback) {
-                            this.onDataChangeCallback('users');
-                        }
+                    }
+
+                    if (this.onDataChangeCallback) {
+                        this.onDataChangeCallback('users');
                     }
                 }, err => {
                     console.warn('Firestore users sync:', err.message);
@@ -118,6 +145,10 @@ class ThanimaAuthStore {
 
     onDataChange(callback) {
         this.onDataChangeCallback = callback;
+    }
+
+    onAccountDeleted(callback) {
+        this.onAccountDeletedCallback = callback;
     }
 
     async _syncUserToCloud(user) {
@@ -272,7 +303,7 @@ class ThanimaAuthStore {
             return { success: false, error: 'Please enter both Reg No and password.' };
         }
 
-        const users = this._getUsers();
+        let users = this._getUsers();
 
         // Master admin login handling
         if (regNo === this.MASTER_ADMIN_ID || regNo === 'THANIMA@ADMIN') {
@@ -284,6 +315,19 @@ class ThanimaAuthStore {
                 this._setCurrentUser(master);
                 return { success: true, user: master };
             }
+        }
+
+        // If cloud Firestore is connected, check cloud directly for account validity
+        if (this.isCloudEnabled && this.db && regNo !== this.MASTER_ADMIN_ID) {
+            try {
+                const docSnap = await this.db.collection('users').doc(regNo).get();
+                if (!docSnap.exists) {
+                    // Account was deleted in Firebase Cloud! Purge from local storage
+                    users = users.filter(u => u.regNo.toUpperCase() !== regNo);
+                    this._saveUsers(users);
+                    return { success: false, error: `Account "${regNo}" was not found or was removed by administrator.` };
+                }
+            } catch (_) {}
         }
 
         const user = users.find(u => u.regNo.toUpperCase() === regNo);
@@ -592,6 +636,61 @@ class ThanimaAuthStore {
         await this._syncLogToCloud(logEntry);
 
         return { success: true, user };
+    }
+
+    async deleteStudentAccount(regNo) {
+        const currentUser = this.getCurrentUser();
+        if (!currentUser || currentUser.role !== 'admin') {
+            return { success: false, error: 'Admin authorization required.' };
+        }
+
+        regNo = (regNo || '').trim().toUpperCase();
+        if (regNo === this.MASTER_ADMIN_ID) {
+            return { success: false, error: 'Cannot delete the Master Admin account.' };
+        }
+
+        let users = this._getUsers();
+        const user = users.find(u => u.regNo.toUpperCase() === regNo);
+        if (!user) {
+            return { success: false, error: `Student "${regNo}" not found.` };
+        }
+
+        // Delete from Firestore Cloud
+        if (this.isCloudEnabled && this.db) {
+            try {
+                await this.db.collection('users').doc(regNo).delete();
+            } catch (err) {
+                return { success: false, error: 'Failed to delete from Firestore: ' + err.message };
+            }
+        }
+
+        // Remove from local storage
+        users = users.filter(u => u.regNo.toUpperCase() !== regNo);
+        this._saveUsers(users);
+
+        // If the deleted user is currently the active session
+        const session = this.getCurrentUser();
+        if (session && session.regNo.toUpperCase() === regNo) {
+            this._setCurrentUser(null);
+        }
+
+        // Log entry in offline audit log
+        const logEntry = {
+            date: new Date().toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
+            regNo,
+            name: user.name,
+            points: -( (user.onlinePoints || 0) + (user.offlinePoints || 0) ),
+            remark: 'Student Account Deleted & Removed by Admin',
+            awardedBy: currentUser.name || 'Admin'
+        };
+        this._logOfflineEntryLocal(logEntry);
+        await this._syncLogToCloud(logEntry);
+
+        if (this.onDataChangeCallback) {
+            this.onDataChangeCallback('users');
+        }
+
+        return { success: true, name: user.name, regNo };
     }
 
     _logOfflineEntryLocal(entry) {

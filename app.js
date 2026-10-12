@@ -689,6 +689,14 @@ class MalayalamApp {
                 this.renderAdminHistory();
                 this.renderAdminRolesList();
             });
+
+            window.thanimaAuth.onAccountDeleted((regNo) => {
+                this.renderLeaderboard();
+                this.renderUserAuthState();
+                this.updateCharacterPointsDisplay();
+                alert(`The account for (${regNo}) was removed from the database by an administrator. You have been logged out.`);
+                this.openAuthModal('login');
+            });
         }
 
         this.ai.initialize((statusText, state) => {
@@ -1846,6 +1854,44 @@ class MalayalamApp {
         this.renderAdminHistory();
         this.renderLeaderboard();
         this.showPointsToast(`Offline points reset for ${res.user.name}.`);
+    }
+
+    async handleDeleteStudentAccount() {
+        const regNo = (document.getElementById('admin-input-regno')?.value || '').trim().toUpperCase();
+        const fb = document.getElementById('admin-feedback-msg');
+        if (!regNo) {
+            alert('Please enter a student Registration Number first.');
+            return;
+        }
+
+        if (!confirm(`⚠️ DANGER: Are you sure you want to permanently delete student account ${regNo}? All points, character progress and records will be deleted.`)) {
+            return;
+        }
+
+        const res = await window.thanimaAuth.deleteStudentAccount(regNo);
+        if (!res.success) {
+            if (fb) {
+                fb.textContent = res.error || 'Failed to delete account.';
+                fb.className = 'my-3 p-3 rounded-xl text-xs font-bold text-center bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300';
+                fb.classList.remove('hidden');
+            }
+            return;
+        }
+
+        if (fb) {
+            fb.textContent = `✓ Successfully deleted student ${res.name} (${res.regNo}).`;
+            fb.className = 'my-3 p-3 rounded-xl text-xs font-bold text-center bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300';
+            fb.classList.remove('hidden');
+        }
+
+        const nameInput = document.getElementById('admin-input-name');
+        const regInput = document.getElementById('admin-input-regno');
+        if (nameInput) nameInput.value = '';
+        if (regInput) regInput.value = '';
+
+        this.renderAdminHistory();
+        this.renderLeaderboard();
+        this.showPointsToast(`Deleted student account for ${res.name}.`);
     }
 
     async addAdminByRegNo() {
