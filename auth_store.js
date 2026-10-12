@@ -502,6 +502,98 @@ class ThanimaAuthStore {
         return { success: true, user: targetUser, createdNew };
     }
 
+    async deductOfflinePoints(regNo, points, remark) {
+        const currentUser = this.getCurrentUser();
+        if (!currentUser || currentUser.role !== 'admin') {
+            return { success: false, error: 'Admin authorization required.' };
+        }
+
+        regNo = (regNo || '').trim().toUpperCase();
+        points = Math.abs(parseInt(points, 10));
+        remark = (remark || 'Points deduction / correction').trim();
+
+        if (!this.validateRegNo(regNo)) {
+            return { success: false, error: 'Registration Number must be in format XXYYYZZZZ (e.g. 23BCE1042).' };
+        }
+        if (isNaN(points) || points <= 0) {
+            return { success: false, error: 'Please enter a valid positive number of points to deduct.' };
+        }
+
+        const users = this._getUsers();
+        const user = users.find(u => u.regNo.toUpperCase() === regNo);
+        if (!user) {
+            return { success: false, error: `Student "${regNo}" was not found.` };
+        }
+
+        const currentPoints = user.offlinePoints || 0;
+        const actualDeducted = Math.min(currentPoints, points);
+        user.offlinePoints = Math.max(0, currentPoints - points);
+        user.offlineEvents = user.offlineEvents || [];
+        user.offlineEvents.push(`${remark} (-${actualDeducted} pts)`);
+
+        this._saveUsers(users);
+
+        const logEntry = {
+            date: new Date().toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
+            regNo,
+            name: user.name,
+            points: -actualDeducted,
+            remark,
+            awardedBy: currentUser.name || 'Admin'
+        };
+
+        this._logOfflineEntryLocal(logEntry);
+        await this._syncUserToCloud(user);
+        await this._syncLogToCloud(logEntry);
+
+        return { success: true, user, deducted: actualDeducted, newOfflinePoints: user.offlinePoints };
+    }
+
+    async resetStudentPoints(regNo, type = 'offline') {
+        const currentUser = this.getCurrentUser();
+        if (!currentUser || currentUser.role !== 'admin') {
+            return { success: false, error: 'Admin authorization required.' };
+        }
+
+        regNo = (regNo || '').trim().toUpperCase();
+        const users = this._getUsers();
+        const user = users.find(u => u.regNo.toUpperCase() === regNo);
+        if (!user) {
+            return { success: false, error: `Student "${regNo}" was not found.` };
+        }
+
+        let remark = '';
+        if (type === 'offline') {
+            user.offlinePoints = 0;
+            remark = 'Offline points reset to 0 by Admin';
+            user.offlineEvents = user.offlineEvents || [];
+            user.offlineEvents.push(remark);
+        } else {
+            user.onlinePoints = 0;
+            user.offlinePoints = 0;
+            user.characterPoints = {};
+            user.offlineEvents = [];
+            remark = 'All points reset to 0 by Admin';
+        }
+
+        this._saveUsers(users);
+
+        const logEntry = {
+            date: new Date().toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
+            regNo,
+            name: user.name,
+            points: 0,
+            remark,
+            awardedBy: currentUser.name || 'Admin'
+        };
+
+        this._logOfflineEntryLocal(logEntry);
+        await this._syncUserToCloud(user);
+        await this._syncLogToCloud(logEntry);
+
+        return { success: true, user };
+    }
+
     _logOfflineEntryLocal(entry) {
         try {
             const logs = JSON.parse(localStorage.getItem(this.STORAGE_KEY_OFFLINE_LOGS)) || [];

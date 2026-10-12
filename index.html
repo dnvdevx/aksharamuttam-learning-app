@@ -91,12 +91,6 @@
                     <span class="hidden md:inline">Quest</span>
                 </button>
 
-                <!-- AI Engine Status Badge (Compact on phones) -->
-                <div id="ai-status-badge" class="flex items-center space-x-1 sm:space-x-1.5 px-2 sm:px-3 py-1.5 rounded-full text-xs font-bold bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-200 transition-all">
-                    <i class="fa-solid fa-spinner fa-spin text-[11px]" id="ai-status-icon"></i>
-                    <span id="ai-status-text" class="hidden sm:inline">AI Loading...</span>
-                </div>
-
                 <!-- Theme Toggle Button -->
                 <button onclick="app.toggleTheme()" class="p-2 sm:p-2.5 rounded-xl bg-btn-gray text-subtle transition"
                     title="Toggle Light/Dark Theme">
@@ -689,8 +683,22 @@
             <!-- Feedback Msg -->
             <div id="admin-feedback-msg" class="hidden my-3 p-3 rounded-xl text-xs font-bold text-center"></div>
 
+            <!-- Action Selector: Award vs Deduct -->
+            <div class="flex p-1 bg-surface-soft rounded-2xl border border-slate-200 dark:border-slate-700 my-2">
+                <button type="button" id="admin-mode-award-btn" onclick="app.setAdminActionMode('award')"
+                    class="w-1/2 py-2 rounded-xl text-xs font-black transition bg-surface text-emerald-600 dark:text-emerald-400 shadow-sm flex items-center justify-center space-x-1.5">
+                    <i class="fa-solid fa-plus-circle"></i>
+                    <span>Award Points</span>
+                </button>
+                <button type="button" id="admin-mode-deduct-btn" onclick="app.setAdminActionMode('deduct')"
+                    class="w-1/2 py-2 rounded-xl text-xs font-black transition text-muted hover:text-heading flex items-center justify-center space-x-1.5">
+                    <i class="fa-solid fa-minus-circle"></i>
+                    <span>Deduct / Remove</span>
+                </button>
+            </div>
+
             <!-- Entry Form -->
-            <form onsubmit="app.handleAdminPointsSubmit(event)" class="space-y-3.5 my-3">
+            <form onsubmit="app.handleAdminPointsSubmit(event)" class="space-y-3.5 my-2">
                 <!-- Reg No Lookup -->
                 <div class="space-y-1">
                     <div class="flex justify-between items-center">
@@ -709,14 +717,14 @@
                         class="w-full px-3.5 py-2.5 bg-surface-soft border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-duo-green" required />
                 </div>
 
-                <!-- Points to Award -->
+                <!-- Points to Award / Deduct -->
                 <div class="space-y-1.5">
-                    <label class="text-[11px] font-black uppercase tracking-wider text-muted block">Offline Points to Award</label>
-                    <div class="flex items-center space-x-2">
-                        <button type="button" onclick="app.setAdminPointsQuick(5)" class="px-3 py-1.5 rounded-xl bg-surface-soft border border-slate-200 dark:border-slate-700 text-xs font-black hover:border-emerald-500">+5 pts</button>
-                        <button type="button" onclick="app.setAdminPointsQuick(10)" class="px-3 py-1.5 rounded-xl bg-surface-soft border border-slate-200 dark:border-slate-700 text-xs font-black hover:border-emerald-500">+10 pts</button>
-                        <button type="button" onclick="app.setAdminPointsQuick(15)" class="px-3 py-1.5 rounded-xl bg-surface-soft border border-slate-200 dark:border-slate-700 text-xs font-black hover:border-emerald-500">+15 pts</button>
-                        <button type="button" onclick="app.setAdminPointsQuick(20)" class="px-3 py-1.5 rounded-xl bg-surface-soft border border-slate-200 dark:border-slate-700 text-xs font-black hover:border-emerald-500">+20 pts</button>
+                    <label id="admin-points-label" class="text-[11px] font-black uppercase tracking-wider text-muted block">Points to Award</label>
+                    <div class="flex items-center space-x-2" id="admin-quick-points-container">
+                        <button type="button" onclick="app.setAdminPointsQuick(5)" class="px-3 py-1.5 rounded-xl bg-surface-soft border border-slate-200 dark:border-slate-700 text-xs font-black hover:border-emerald-500 quick-pts-btn">5 pts</button>
+                        <button type="button" onclick="app.setAdminPointsQuick(10)" class="px-3 py-1.5 rounded-xl bg-surface-soft border border-slate-200 dark:border-slate-700 text-xs font-black hover:border-emerald-500 quick-pts-btn">10 pts</button>
+                        <button type="button" onclick="app.setAdminPointsQuick(15)" class="px-3 py-1.5 rounded-xl bg-surface-soft border border-slate-200 dark:border-slate-700 text-xs font-black hover:border-emerald-500 quick-pts-btn">15 pts</button>
+                        <button type="button" onclick="app.setAdminPointsQuick(20)" class="px-3 py-1.5 rounded-xl bg-surface-soft border border-slate-200 dark:border-slate-700 text-xs font-black hover:border-emerald-500 quick-pts-btn">20 pts</button>
                     </div>
                     <input id="admin-input-points" type="number" min="1" max="500" value="10"
                         class="w-full mt-1 px-3.5 py-2.5 bg-surface-soft border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-duo-green" required />
@@ -724,16 +732,25 @@
 
                 <!-- Activity / Meeting Remark -->
                 <div class="space-y-1">
-                    <label class="text-[11px] font-black uppercase tracking-wider text-muted block">Event / Class Remarks</label>
+                    <label id="admin-remark-label" class="text-[11px] font-black uppercase tracking-wider text-muted block">Event / Class Remarks</label>
                     <input id="admin-input-remark" type="text" placeholder="e.g. Class 1 Attendance & Writing Test"
                         class="w-full px-3.5 py-2.5 bg-surface-soft border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-duo-green" required />
                 </div>
 
-                <button type="submit"
-                    class="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black shadow transition active:scale-95 flex items-center justify-center space-x-2">
-                    <i class="fa-solid fa-plus-circle"></i>
-                    <span>Award Offline Points</span>
-                </button>
+                <div class="space-y-2 pt-1">
+                    <button id="admin-submit-action-btn" type="submit"
+                        class="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black shadow transition active:scale-95 flex items-center justify-center space-x-2">
+                        <i class="fa-solid fa-plus-circle"></i>
+                        <span>Award Offline Points</span>
+                    </button>
+                    <div class="flex justify-between items-center px-1">
+                        <button type="button" onclick="app.handleResetStudentOfflinePoints()"
+                            class="text-[11px] font-bold text-red-500 hover:text-red-600 transition flex items-center space-x-1">
+                            <i class="fa-solid fa-rotate-left"></i>
+                            <span>Reset student's offline points to 0</span>
+                        </button>
+                    </div>
+                </div>
             </form>
 
             <!-- Recent Entries History Ledger -->

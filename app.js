@@ -1697,6 +1697,35 @@ class MalayalamApp {
         if (modal) modal.classList.add('hidden');
     }
 
+    setAdminActionMode(mode) {
+        this.adminActionMode = mode;
+        const awardBtn = document.getElementById('admin-mode-award-btn');
+        const deductBtn = document.getElementById('admin-mode-deduct-btn');
+        const submitBtn = document.getElementById('admin-submit-action-btn');
+        const pointsLabel = document.getElementById('admin-points-label');
+        const remarkInput = document.getElementById('admin-input-remark');
+
+        if (mode === 'award') {
+            if (awardBtn) awardBtn.className = 'w-1/2 py-2 rounded-xl text-xs font-black transition bg-surface text-emerald-600 dark:text-emerald-400 shadow-sm flex items-center justify-center space-x-1.5';
+            if (deductBtn) deductBtn.className = 'w-1/2 py-2 rounded-xl text-xs font-black transition text-muted hover:text-heading flex items-center justify-center space-x-1.5';
+            if (submitBtn) {
+                submitBtn.className = 'w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black shadow transition active:scale-95 flex items-center justify-center space-x-2';
+                submitBtn.innerHTML = '<i class="fa-solid fa-plus-circle"></i><span>Award Offline Points</span>';
+            }
+            if (pointsLabel) pointsLabel.textContent = 'Points to Award';
+            if (remarkInput) remarkInput.placeholder = 'e.g. Class 1 Attendance & Writing Test';
+        } else {
+            if (awardBtn) awardBtn.className = 'w-1/2 py-2 rounded-xl text-xs font-black transition text-muted hover:text-heading flex items-center justify-center space-x-1.5';
+            if (deductBtn) deductBtn.className = 'w-1/2 py-2 rounded-xl text-xs font-black transition bg-surface text-red-600 dark:text-red-400 shadow-sm flex items-center justify-center space-x-1.5';
+            if (submitBtn) {
+                submitBtn.className = 'w-full py-3 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-black shadow transition active:scale-95 flex items-center justify-center space-x-2';
+                submitBtn.innerHTML = '<i class="fa-solid fa-minus-circle"></i><span>Deduct / Remove Points</span>';
+            }
+            if (pointsLabel) pointsLabel.textContent = 'Points to Deduct / Remove';
+            if (remarkInput) remarkInput.placeholder = 'e.g. Points correction / Mistake';
+        }
+    }
+
     onAdminRegNoInput(val) {
         const regNo = (val || '').trim().toUpperCase();
         const statusEl = document.getElementById('admin-regno-status');
@@ -1716,7 +1745,9 @@ class MalayalamApp {
         if (user) {
             if (nameInput) nameInput.value = user.name;
             if (statusEl) {
-                statusEl.textContent = '✓ Registered Student';
+                const off = user.offlinePoints || 0;
+                const tot = (user.onlinePoints || 0) + off;
+                statusEl.textContent = `✓ ${user.name} • Off: ${off} | Tot: ${tot} pts`;
                 statusEl.className = 'text-[10px] font-bold text-emerald-500';
             }
         } else {
@@ -1742,10 +1773,18 @@ class MalayalamApp {
 
         if (!window.thanimaAuth) return;
 
-        const res = await window.thanimaAuth.addOfflinePoints(regNo, points, remark, name);
+        let res;
+        const isDeduct = this.adminActionMode === 'deduct';
+
+        if (isDeduct) {
+            res = await window.thanimaAuth.deductOfflinePoints(regNo, points, remark);
+        } else {
+            res = await window.thanimaAuth.addOfflinePoints(regNo, points, remark, name);
+        }
+
         if (!res.success) {
             if (fb) {
-                fb.textContent = res.error || 'Failed to award points.';
+                fb.textContent = res.error || 'Failed to update points.';
                 fb.className = 'my-3 p-3 rounded-xl text-xs font-bold text-center bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300';
                 fb.classList.remove('hidden');
             }
@@ -1753,8 +1792,13 @@ class MalayalamApp {
         }
 
         if (fb) {
-            fb.textContent = `✓ Successfully awarded +${points} offline points to ${res.user.name} (${res.user.regNo})!`;
-            fb.className = 'my-3 p-3 rounded-xl text-xs font-bold text-center bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300';
+            if (isDeduct) {
+                fb.textContent = `✓ Successfully deducted -${res.deducted} points from ${res.user.name} (${res.user.regNo})! Current offline: ${res.newOfflinePoints} pts.`;
+                fb.className = 'my-3 p-3 rounded-xl text-xs font-bold text-center bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300';
+            } else {
+                fb.textContent = `✓ Successfully awarded +${points} offline points to ${res.user.name} (${res.user.regNo})!`;
+                fb.className = 'my-3 p-3 rounded-xl text-xs font-bold text-center bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300';
+            }
             fb.classList.remove('hidden');
         }
 
@@ -1767,7 +1811,41 @@ class MalayalamApp {
 
         this.renderAdminHistory();
         this.renderLeaderboard();
-        this.showPointsToast(`+${points} points awarded to ${res.user.name}!`);
+        this.showPointsToast(isDeduct ? `-${res.deducted} points deducted from ${res.user.name}` : `+${points} points awarded to ${res.user.name}!`);
+    }
+
+    async handleResetStudentOfflinePoints() {
+        const regNo = (document.getElementById('admin-input-regno')?.value || '').trim().toUpperCase();
+        const fb = document.getElementById('admin-feedback-msg');
+        if (!regNo) {
+            alert('Please enter a student Registration Number first.');
+            return;
+        }
+
+        if (!confirm(`Are you sure you want to reset offline points for student ${regNo} to 0?`)) {
+            return;
+        }
+
+        const res = await window.thanimaAuth.resetStudentPoints(regNo, 'offline');
+        if (!res.success) {
+            if (fb) {
+                fb.textContent = res.error || 'Failed to reset points.';
+                fb.className = 'my-3 p-3 rounded-xl text-xs font-bold text-center bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300';
+                fb.classList.remove('hidden');
+            }
+            return;
+        }
+
+        if (fb) {
+            fb.textContent = `✓ Successfully reset offline points for ${res.user.name} (${res.user.regNo}) to 0.`;
+            fb.className = 'my-3 p-3 rounded-xl text-xs font-bold text-center bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300';
+            fb.classList.remove('hidden');
+        }
+
+        this.onAdminRegNoInput(regNo);
+        this.renderAdminHistory();
+        this.renderLeaderboard();
+        this.showPointsToast(`Offline points reset for ${res.user.name}.`);
     }
 
     async addAdminByRegNo() {
