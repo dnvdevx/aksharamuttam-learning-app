@@ -2,6 +2,9 @@
 node_modules/
 package-lock.json
 
+# Firebase credentials & config (generated from environment variables)
+firebase_config.js
+
 # Firebase temporary deployment cache
 .firebase/
 

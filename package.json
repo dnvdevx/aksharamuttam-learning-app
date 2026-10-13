@@ -4,6 +4,7 @@
   "description": "",
   "main": "app.js",
   "scripts": {
+    "build": "node generate_config.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
